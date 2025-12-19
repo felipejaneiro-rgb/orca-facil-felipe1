@@ -8,12 +8,12 @@ export const authService = {
   mapSupabaseUser: (sbUser: any): User => {
     return {
       id: sbUser.id,
-      name: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || 'Usuário Google',
+      name: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || 'Usuário',
       email: sbUser.email || '',
-      document: sbUser.user_metadata?.document || '', // Campos adicionais podem ser vindo do profile/metadata
+      document: sbUser.user_metadata?.document || '',
       whatsapp: sbUser.user_metadata?.phone || '',
       website: sbUser.user_metadata?.website || '',
-      passwordHash: '', // Não usado com OAuth
+      passwordHash: '',
       createdAt: sbUser.created_at
     };
   },
@@ -25,10 +25,7 @@ export const authService = {
   },
 
   loginWithGoogle: async () => {
-    // Definimos a URL de redirecionamento explicitamente. 
-    // Em alguns sandboxes, window.location.origin pode não ser suficiente.
     const redirectTo = window.location.origin + window.location.pathname;
-
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
@@ -47,13 +44,11 @@ export const authService = {
     if (error) throw error;
   },
 
-  // Added updatePassword method to fix the error in CompanySettingsModal
   updatePassword: async (password: string) => {
     const { error } = await supabase.auth.updateUser({ password });
     if (error) throw error;
   },
 
-  // Mantido para compatibilidade com login manual via email se necessário no futuro
   login: async (email: string, password: string): Promise<User> => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -63,20 +58,21 @@ export const authService = {
     return authService.mapSupabaseUser(data.user);
   },
 
-  register: async (userData: any): Promise<User> => {
+  /**
+   * Registro aprimorado que retorna sessão se disponível
+   */
+  register: async (userData: any) => {
     const { data, error } = await supabase.auth.signUp({
       email: userData.email,
       password: userData.password,
       options: {
         data: {
           name: userData.name,
-          document: userData.document,
-          phone: userData.whatsapp,
-          website: userData.website
+          full_name: userData.name
         }
       }
     });
     if (error) throw error;
-    return authService.mapSupabaseUser(data.user);
+    return data; // Retorna { user, session }
   }
 };
