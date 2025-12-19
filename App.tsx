@@ -34,7 +34,6 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [appError, setAppError] = useState<string | null>(null);
   
-  // Refs para controle de ciclo de vida
   const initializingRef = useRef(false);
   const isFirstLoadRef = useRef(true);
 
@@ -46,13 +45,16 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Memoiza a data para evitar cálculos de string no render
   const currentDateDisplay = useMemo(() => 
     new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }),
   []);
 
   const initializeCompany = useCallback(async (userId: string) => {
-    if (defaultCompany) return;
+    // Se já temos a empresa, não buscamos de novo para evitar "pulos" de UI
+    if (defaultCompany) {
+      setLoading(false);
+      return;
+    }
 
     try {
       const company = await companyService.getCompany(userId);
@@ -62,31 +64,37 @@ const App: React.FC = () => {
           setCurrentView('dashboard');
         }
       } else {
+        // Só vai para o onboarding se realmente não existir no banco
         setCurrentView('onboarding');
       }
     } catch (err: any) {
-      console.error("Erro ao carregar empresa:", err);
-      if (isFirstLoadRef.current) setCurrentView('onboarding');
+      console.error("Erro silencioso ao carregar empresa:", err);
+      // Em caso de erro de rede, mantemos na visualização atual se possível
+      if (isFirstLoadRef.current) setCurrentView('dashboard');
     } finally {
       isFirstLoadRef.current = false;
+      setLoading(false);
     }
   }, [defaultCompany]);
 
   useEffect(() => {
+    // Tenta pegar a sessão inicial imediatamente
+    supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session?.user) {
+            const user = authService.mapSupabaseUser(session.user);
+            setCurrentUser(user);
+            initializeCompany(user.id);
+        } else {
+            setLoading(false);
+        }
+    });
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
         if (!currentUser || currentUser.id !== session.user.id) {
           const user = authService.mapSupabaseUser(session.user);
           setCurrentUser(user);
-          
-          if (!initializingRef.current) {
-            initializingRef.current = true;
-            await initializeCompany(user.id);
-            setLoading(false);
-            initializingRef.current = false;
-          }
-        } else {
-          setLoading(false);
+          await initializeCompany(user.id);
         }
       } else {
         if (event === 'SIGNED_OUT') {
@@ -99,9 +107,7 @@ const App: React.FC = () => {
       }
     });
 
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, [currentUser, initializeCompany]);
 
   const handleLogout = useCallback(async () => {
@@ -121,7 +127,6 @@ const App: React.FC = () => {
     setQuoteData(p => ({...p, ...d}));
   }, []);
 
-  // Isola o conteúdo principal em um useMemo para evitar re-renders da Sidebar/Header
   const renderViewContent = useMemo(() => {
     if (loading && !currentUser) return null;
     
@@ -169,10 +174,10 @@ const App: React.FC = () => {
         <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 p-4">
             <div className="bg-white dark:bg-gray-900 p-8 rounded-3xl shadow-2xl max-w-md text-center border border-red-100">
                 <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
-                <h2 className="text-xl font-bold mb-2 dark:text-white">Erro no Aplicativo</h2>
-                <p className="text-gray-600 dark:text-gray-400 mb-6 text-sm">{appError}</p>
+                <h2 className="text-xl font-bold mb-2 dark:text-white">Conexão Instável</h2>
+                <p className="text-gray-600 dark:text-gray-400 mb-6 text-sm">Não conseguimos sincronizar com o servidor agora. Verifique sua internet.</p>
                 <button onClick={() => window.location.reload()} className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-brand-700 transition-colors">
-                  <RefreshCw size={18} /> Recarregar
+                  <RefreshCw size={18} /> Tentar Novamente
                 </button>
             </div>
         </div>
@@ -186,9 +191,9 @@ const App: React.FC = () => {
                 <div className="absolute w-16 h-16 border-4 border-brand-100 dark:border-brand-900/30 rounded-full"></div>
                 <Loader2 className="animate-spin text-brand-600" size={64} />
             </div>
-            <div className="mt-8 text-center">
-                <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-xs">OrçaFácil Admin</p>
-                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold animate-pulse uppercase tracking-widest">Sincronizando Dados...</p>
+            <div className="mt-8 text-center animate-pulse">
+                <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-xs">Aguardando Servidor</p>
+                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold">A SINCRONIZAÇÃO PODE DEMORAR ALGUNS SEGUNDOS...</p>
             </div>
         </div>
       );

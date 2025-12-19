@@ -20,8 +20,8 @@ const supabaseUrl = getEnvVar('VITE_SUPABASE_URL') || PROVIDED_URL;
 const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY') || PROVIDED_ANON_KEY;
 
 /**
- * CONFIGURAÇÃO DE SESSÃO RÍGIDA
- * Usamos persistSession: true e evitamos re-detecção constante na URL após o primeiro carregamento.
+ * CONFIGURAÇÃO DE SESSÃO ROBUSTA
+ * Priorizamos a estabilidade da sessão sobre a detecção imediata de URL para evitar reloads infinitos.
  */
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
@@ -29,5 +29,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
     detectSessionInUrl: true, 
     storageKey: 'orcafacil-auth-v1',
+    flowType: 'pkce' // Mais estável para redirecionamentos OAuth
   }
 });

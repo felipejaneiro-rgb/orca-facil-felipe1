@@ -5,31 +5,24 @@ import { CompanyProfile } from '../types';
 export const companyService = {
   /**
    * Busca a empresa vinculada ao usuário logado pelo owner_id.
-   * Inclui um timeout de segurança para não travar o app se a rede falhar.
+   * Removido o timeout manual para permitir que a rede opere em seu tempo natural.
    */
   getCompany: async (userId: string): Promise<CompanyProfile | null> => {
-    // Promessa de timeout para evitar carregamento infinito
-    const timeout = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error("Tempo de resposta do servidor esgotado.")), 5000)
-    );
-
     try {
-      const fetchPromise = supabase
+      const { data, error }: any = await supabase
         .from('companies')
         .select('*')
         .eq('owner_id', userId)
         .maybeSingle();
 
-      const { data, error }: any = await Promise.race([fetchPromise, timeout]);
-
       if (error) {
         console.error("Erro Supabase (getCompany):", error);
-        return null; // Falha silenciosa para permitir onboarding
+        return null; 
       }
 
       return data;
     } catch (e) {
-      console.warn("Company fetch timed out or failed:", e);
+      console.warn("Erro ao buscar dados da empresa:", e);
       return null;
     }
   },
@@ -41,7 +34,7 @@ export const companyService = {
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     
     if (authError || !user) {
-      throw new Error("Sessão expirada. Faça login novamente.");
+      throw new Error("Sessão inválida. Por favor, tente fazer login novamente.");
     }
 
     const { data, error } = await supabase
@@ -64,10 +57,7 @@ export const companyService = {
 
     if (error) {
       console.error("Erro Supabase (createCompany):", error);
-      if (error.code === '42501') {
-        throw new Error("Erro de permissão no banco de dados. Verifique as políticas RLS.");
-      }
-      throw new Error(error.message || "Não foi possível salvar os dados.");
+      throw new Error(error.message || "Não foi possível salvar os dados da empresa.");
     }
 
     return data;
