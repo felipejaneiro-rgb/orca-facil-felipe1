@@ -30,11 +30,12 @@ const QuotePreview = lazy(() => import('./components/QuotePreview'));
 type AppView = 'dashboard' | 'editor' | 'history' | 'reports' | 'catalog' | 'clients' | 'onboarding';
 
 const App: React.FC = () => {
+  // --- ESTADOS DE SESSÃO (CONFORME SUGESTÃO) ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [appError, setAppError] = useState<string | null>(null);
   
-  const initializingRef = useRef(false);
   const isFirstLoadRef = useRef(true);
 
   const [currentView, setCurrentView] = useState<AppView>('dashboard');
@@ -50,7 +51,6 @@ const App: React.FC = () => {
   []);
 
   const initializeCompany = useCallback(async (userId: string) => {
-    // Se já temos a empresa, não buscamos de novo para evitar "pulos" de UI
     if (defaultCompany) {
       setLoading(false);
       return;
@@ -64,12 +64,10 @@ const App: React.FC = () => {
           setCurrentView('dashboard');
         }
       } else {
-        // Só vai para o onboarding se realmente não existir no banco
         setCurrentView('onboarding');
       }
     } catch (err: any) {
-      console.error("Erro silencioso ao carregar empresa:", err);
-      // Em caso de erro de rede, mantemos na visualização atual se possível
+      console.warn("Erro ao buscar empresa (mantendo sessão):", err);
       if (isFirstLoadRef.current) setCurrentView('dashboard');
     } finally {
       isFirstLoadRef.current = false;
@@ -77,38 +75,55 @@ const App: React.FC = () => {
     }
   }, [defaultCompany]);
 
+  // --- PASSO 1 & 2: MONITORAMENTO DE SESSÃO ROBUSTO ---
   useEffect(() => {
-    // Tenta pegar a sessão inicial imediatamente
+    let mounted = true;
+
+    // Tenta pegar a sessão inicial do disco
     supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session?.user) {
-            const user = authService.mapSupabaseUser(session.user);
-            setCurrentUser(user);
-            initializeCompany(user.id);
-        } else {
-            setLoading(false);
-        }
+      if (!mounted) return;
+      
+      if (session?.user) {
+        setCurrentUser(authService.mapSupabaseUser(session.user));
+      }
+      setSessionReady(true);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    // Escuta mudanças de estado (login/logout)
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mounted) return;
+
       if (session?.user) {
-        if (!currentUser || currentUser.id !== session.user.id) {
-          const user = authService.mapSupabaseUser(session.user);
-          setCurrentUser(user);
-          await initializeCompany(user.id);
-        }
+        setCurrentUser(authService.mapSupabaseUser(session.user));
       } else {
+        // Se realmente não houver sessão, limpa estados mas sem expulsar agressivamente
+        setCurrentUser(null);
+        setDefaultCompany(null);
         if (event === 'SIGNED_OUT') {
-          setCurrentUser(null);
-          setDefaultCompany(null);
-          setCurrentView('dashboard');
-          isFirstLoadRef.current = true;
+           setCurrentView('dashboard');
+           isFirstLoadRef.current = true;
         }
         setLoading(false);
       }
     });
 
-    return () => subscription.unsubscribe();
-  }, [currentUser, initializeCompany]);
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  // --- PASSO 3: CARREGAMENTO DE DADOS APÓS SESSÃO PRONTA ---
+  useEffect(() => {
+    if (!sessionReady) return;
+
+    if (currentUser) {
+      initializeCompany(currentUser.id);
+    } else {
+      // Se não tem usuário, para de carregar para mostrar tela de Login
+      setLoading(false);
+    }
+  }, [sessionReady, currentUser, initializeCompany]);
 
   const handleLogout = useCallback(async () => {
       if (confirm('Deseja sair da sua conta?')) {
@@ -128,7 +143,8 @@ const App: React.FC = () => {
   }, []);
 
   const renderViewContent = useMemo(() => {
-    if (loading && !currentUser) return null;
+    // Não renderiza nada se estiver carregando a sessão inicial ou dados da empresa
+    if (loading) return null;
     
     try {
       switch (currentView) {
@@ -169,14 +185,15 @@ const App: React.FC = () => {
     }
   }, [currentView, currentStep, quoteData, currentUser, defaultCompany, navigateToEditor, updateQuoteData, loading]);
 
+  // Tela de Erro Fatal
   if (appError) {
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 p-4">
-            <div className="bg-white dark:bg-gray-900 p-8 rounded-3xl shadow-2xl max-w-md text-center border border-red-100">
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 p-4 text-center">
+            <div className="bg-white dark:bg-gray-900 p-8 rounded-3xl shadow-2xl max-w-md border border-red-100">
                 <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
-                <h2 className="text-xl font-bold mb-2 dark:text-white">Conexão Instável</h2>
-                <p className="text-gray-600 dark:text-gray-400 mb-6 text-sm">Não conseguimos sincronizar com o servidor agora. Verifique sua internet.</p>
-                <button onClick={() => window.location.reload()} className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-brand-700 transition-colors">
+                <h2 className="text-xl font-bold mb-2 dark:text-white">Algo deu errado</h2>
+                <p className="text-gray-600 dark:text-gray-400 mb-6 text-sm">{appError}</p>
+                <button onClick={() => window.location.reload()} className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2">
                   <RefreshCw size={18} /> Tentar Novamente
                 </button>
             </div>
@@ -184,6 +201,7 @@ const App: React.FC = () => {
     );
   }
 
+  // TELA DE CARREGAMENTO (ESTADO INICIAL)
   if (loading && !currentUser) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950">
@@ -192,14 +210,15 @@ const App: React.FC = () => {
                 <Loader2 className="animate-spin text-brand-600" size={64} />
             </div>
             <div className="mt-8 text-center animate-pulse">
-                <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-xs">Aguardando Servidor</p>
-                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold">A SINCRONIZAÇÃO PODE DEMORAR ALGUNS SEGUNDOS...</p>
+                <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-xs">Validando Sessão</p>
+                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold">AGUARDE UM INSTANTE...</p>
             </div>
         </div>
       );
   }
 
-  if (!currentUser) {
+  // TELA DE LOGIN (MOSTRADA SOMENTE SE sessionReady FOR TRUE E NÃO HOUVER USUÁRIO)
+  if (sessionReady && !currentUser) {
     return (
       <Suspense fallback={null}>
         <AuthView onLoginSuccess={() => {}} />
@@ -207,12 +226,13 @@ const App: React.FC = () => {
     );
   }
 
+  // TELA DE ONBOARDING (DADOS DA EMPRESA FALTANDO)
   if (currentView === 'onboarding') {
     return (
       <Suspense fallback={null}>
         <OnboardingView 
-          userId={currentUser.id} 
-          userEmail={currentUser.email} 
+          userId={currentUser!.id} 
+          userEmail={currentUser!.email} 
           onComplete={(company) => {
             setDefaultCompany(company);
             setCurrentView('dashboard');
@@ -222,6 +242,7 @@ const App: React.FC = () => {
     );
   }
 
+  // APLICAÇÃO PRINCIPAL (DASHBOARD/EDITOR)
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-950 font-sans overflow-hidden antialiased">
       <Sidebar 
