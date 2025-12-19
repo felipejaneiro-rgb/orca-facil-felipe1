@@ -34,8 +34,9 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [appError, setAppError] = useState<string | null>(null);
   
+  // Refs para controle de ciclo de vida sem disparar re-renders
   const initializingRef = useRef(false);
-  const hasLoadedRef = useRef(false);
+  const isFirstLoadRef = useRef(true);
 
   const [currentView, setCurrentView] = useState<AppView>('dashboard');
   const [currentStep, setCurrentStep] = useState(0);
@@ -45,79 +46,71 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Inicializa dados da empresa
-  const loadCompanyData = useCallback(async (userId: string) => {
+  // Inicializa dados da empresa apenas se necessário
+  const initializeCompany = useCallback(async (userId: string) => {
+    // Se já temos a empresa carregada, não buscamos novamente (evita flicker no Alt+Tab)
+    if (defaultCompany) return;
+
     try {
       const company = await companyService.getCompany(userId);
       if (company) {
         setDefaultCompany(company);
-        setCurrentView('dashboard');
+        // Só muda para dashboard se for a PRIMEIRA vez que abre o app
+        if (isFirstLoadRef.current) {
+          setCurrentView('dashboard');
+        }
       } else {
         setCurrentView('onboarding');
       }
     } catch (err: any) {
       console.error("Erro ao carregar empresa:", err);
-      setCurrentView('onboarding');
+      if (isFirstLoadRef.current) setCurrentView('onboarding');
+    } finally {
+      isFirstLoadRef.current = false;
     }
-  }, []);
+  }, [defaultCompany]);
 
   useEffect(() => {
-    // Se já carregamos a sessão inicial, não precisamos assinar novamente
-    if (hasLoadedRef.current) return;
-
-    // FAIL-SAFE: Se o app não carregar em 6 segundos, libera a tela
-    const timer = setTimeout(() => {
-        if (!hasLoadedRef.current) {
-            console.warn("Fail-safe ativado: Carregamento demorou demais.");
-            setLoading(false);
-            hasLoadedRef.current = true;
-          }
-    }, 6000);
-
+    // Monitor de Autenticação do Supabase
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log(`Auth Event: ${event}`);
+      console.log(`Auth Update: ${event}`);
       
-      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-        if (session?.user && !initializingRef.current) {
-          initializingRef.current = true;
+      if (session?.user) {
+        // Mapeia o usuário se ainda não tivermos ou se mudou
+        if (!currentUser || currentUser.id !== session.user.id) {
+          const user = authService.mapSupabaseUser(session.user);
+          setCurrentUser(user);
           
-          try {
-            const user = authService.mapSupabaseUser(session.user);
-            setCurrentUser(user);
-            await loadCompanyData(user.id);
-          } catch (e) {
-            console.error("Erro na inicialização de dados:", e);
-          } finally {
+          if (!initializingRef.current) {
+            initializingRef.current = true;
+            await initializeCompany(user.id);
             setLoading(false);
             initializingRef.current = false;
-            hasLoadedRef.current = true;
-            clearTimeout(timer);
           }
-        } else if (!session) {
+        } else {
+          // Se o usuário já está logado e mapeado, apenas remove o loader se houver
           setLoading(false);
-          hasLoadedRef.current = true;
-          clearTimeout(timer);
         }
-      } else if (event === 'SIGNED_OUT') {
-        setCurrentUser(null);
-        setDefaultCompany(null);
+      } else {
+        // Caso de LOGOUT real
+        if (event === 'SIGNED_OUT') {
+          setCurrentUser(null);
+          setDefaultCompany(null);
+          setCurrentView('dashboard');
+          isFirstLoadRef.current = true;
+        }
         setLoading(false);
-        initializingRef.current = false;
-        hasLoadedRef.current = true;
-        setCurrentView('dashboard');
-        clearTimeout(timer);
       }
     });
 
     return () => {
-        subscription.unsubscribe();
-        clearTimeout(timer);
+      subscription.unsubscribe();
     };
-    // REMOVIDO 'loading' das dependências para evitar loop infinito e re-load no Alt+Tab
-  }, [loadCompanyData]);
+  }, [currentUser, initializeCompany]);
 
   const handleLogout = async () => {
       if (confirm('Deseja sair da sua conta?')) {
+        setLoading(true);
         await authService.logout();
       }
   };
@@ -137,7 +130,8 @@ const App: React.FC = () => {
     );
   }
 
-  if (loading) {
+  // Loader inicial silencioso se já tivermos dados
+  if (loading && !currentUser) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950">
             <div className="relative flex items-center justify-center">
@@ -146,12 +140,13 @@ const App: React.FC = () => {
             </div>
             <div className="mt-8 text-center">
                 <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-xs">OrçaFácil Admin</p>
-                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold animate-pulse">SINCRONIZANDO DADOS...</p>
+                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold animate-pulse">SINCRONIZANDO...</p>
             </div>
         </div>
       );
   }
 
+  // Se não tem usuário, mostra tela de login
   if (!currentUser) {
     return (
       <Suspense fallback={null}>
@@ -160,6 +155,7 @@ const App: React.FC = () => {
     );
   }
 
+  // Se logou mas não configurou a empresa
   if (currentView === 'onboarding') {
     return (
       <Suspense fallback={null}>

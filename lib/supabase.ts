@@ -20,14 +20,14 @@ const supabaseUrl = getEnvVar('VITE_SUPABASE_URL') || PROVIDED_URL;
 const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY') || PROVIDED_ANON_KEY;
 
 /**
- * CONFIGURAÇÃO DE SESSÃO COM PERSISTÊNCIA
- * persistSession: true permite que o usuário continue logado após F5.
+ * CONFIGURAÇÃO DE SESSÃO RÍGIDA
+ * Usamos persistSession: true e evitamos re-detecção constante na URL após o primeiro carregamento.
  */
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true,
-    storageKey: 'orcafacil-auth-token', // Nome fixo para estabilidade
+    detectSessionInUrl: true, 
+    storageKey: 'orcafacil-auth-v1',
   }
 });
