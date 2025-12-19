@@ -76,18 +76,15 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
         tipo_empresa: personType
       };
 
-      // Tenta o cadastro real
+      // Tenta criar no Supabase
       const savedCompany = await companyService.createCompany(userId, companyData);
+      
+      // Se chegou aqui, deu certo. Notifica o App.tsx
       onComplete(savedCompany);
       
     } catch (err: any) {
-      console.error("Onboarding Error:", err);
-      // Se for erro de RLS, damos uma dica técnica mas amigável
-      if (err.message.includes('RLS') || err.message.includes('security policy')) {
-        setError("Erro de permissão no banco de dados. Verifique se as políticas de RLS estão configuradas para permitir inserção.");
-      } else {
-        setError(err.message || "Erro ao salvar sua empresa. Tente novamente.");
-      }
+      console.error("Onboarding Error Catch:", err);
+      setError(err.message || "Erro inesperado ao salvar dados.");
     } finally {
       setLoading(false);
     }
@@ -96,7 +93,7 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col md:flex-row transition-colors duration-300 relative">
       
-      {/* Lado Esquerdo */}
+      {/* Lado Esquerdo - Visual */}
       <div className="hidden md:flex md:w-5/12 lg:w-4/12 bg-brand-600 dark:bg-gray-900 flex-col justify-center items-center text-white p-10 relative overflow-hidden shrink-0">
         <div className="absolute inset-0 bg-gradient-to-br from-brand-600 to-brand-800 dark:from-black dark:to-gray-900 opacity-90 z-0"></div>
         <div className="relative z-10 text-center animate-fadeIn">
@@ -105,13 +102,13 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
             </div>
             <h1 className="text-4xl lg:text-5xl font-black mb-4 tracking-tighter">OrçaFácil</h1>
             <p className="text-lg text-brand-100 dark:text-gray-400 max-w-xs mx-auto font-medium">
-                Vamos configurar o perfil profissional da sua empresa.
+                Vamos configurar o perfil profissional para seus orçamentos.
             </p>
         </div>
       </div>
 
-      {/* Lado Direito */}
-      <div className="flex-1 flex items-center justify-center p-4 md:p-12 bg-white dark:bg-gray-950 overflow-y-auto min-h-screen">
+      {/* Lado Direito - Formulário */}
+      <div className="flex-1 flex items-center justify-center p-4 md:p-12 bg-white dark:bg-gray-950 overflow-y-auto">
         <div className="w-full max-w-xl space-y-8 py-8 animate-slideUp relative">
             
             <div className="flex md:hidden flex-col items-center mb-8">
@@ -129,15 +126,15 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
                 <div className="p-2 rounded-full bg-gray-50 dark:bg-gray-900 group-hover:bg-red-50 transition-colors">
                     <ChevronLeft size={20} />
                 </div>
-                <span className="text-sm">Sair da conta</span>
+                <span className="text-sm font-bold">Cancelar e sair</span>
             </button>
 
             <div className="text-center md:text-left pt-2 md:pt-6">
                 <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">
-                    Configuração Inicial
+                    Falta pouco!
                 </h2>
                 <p className="mt-2 text-sm text-gray-500 dark:text-gray-400 font-medium">
-                    Esses dados serão exibidos no topo dos seus orçamentos em PDF.
+                    Preencha os dados da sua empresa para começar a emitir orçamentos profissionais em PDF.
                 </p>
             </div>
 
@@ -150,7 +147,7 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
 
             <form onSubmit={handleSubmit} className="space-y-8">
                 <div className="space-y-3">
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest">Tipo de Cadastro *</label>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest">Atuação *</label>
                     <div className="grid grid-cols-2 gap-4">
                         <button 
                             type="button" 
@@ -158,7 +155,7 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
                             disabled={loading}
                             className={`flex items-center justify-center gap-2 p-4 rounded-2xl border-2 transition-all ${personType === 'pessoa_juridica' ? 'border-brand-600 bg-brand-50 dark:bg-brand-900/20 text-brand-700 dark:text-brand-400 font-bold ring-4 ring-brand-500/10' : 'border-gray-50 dark:border-gray-800 text-gray-400 hover:bg-gray-50'}`}
                         >
-                            <Briefcase size={18} /> Pessoa Jurídica
+                            <Briefcase size={18} /> Empresa (PJ)
                         </button>
                         <button 
                             type="button" 
@@ -166,7 +163,7 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
                             disabled={loading}
                             className={`flex items-center justify-center gap-2 p-4 rounded-2xl border-2 transition-all ${personType === 'pessoa_fisica' ? 'border-brand-600 bg-brand-50 dark:bg-brand-900/20 text-brand-700 dark:text-brand-400 font-bold ring-4 ring-brand-500/10' : 'border-gray-50 dark:border-gray-800 text-gray-400 hover:bg-gray-50'}`}
                         >
-                            <User size={18} /> Pessoa Física
+                            <User size={18} /> Autônomo (PF)
                         </button>
                     </div>
                 </div>
@@ -182,7 +179,7 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
                             disabled={loading}
                         />
                         <Input 
-                            label="Nome Fantasia *" 
+                            label="Nome Fantasia / Comercial *" 
                             name="nome_fantasia" 
                             value={formData.nome_fantasia} 
                             onChange={handleChange} 
@@ -219,17 +216,17 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
                         value={formData.email} 
                         onChange={handleChange} 
                         icon={<Mail size={16} />} 
-                        placeholder="seu@email.com" 
+                        placeholder="contato@suaempresa.com" 
                         disabled={loading}
                     />
 
                     <Input 
-                        label="Endereço Comercial (Opcional)" 
+                        label="Endereço Comercial (Cidade - UF)" 
                         name="endereco" 
                         value={formData.endereco} 
                         onChange={handleChange} 
                         icon={<MapPin size={16} />} 
-                        placeholder="Cidade - UF" 
+                        placeholder="São Paulo - SP" 
                         disabled={loading}
                     />
                 </div>
@@ -240,7 +237,7 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
                         className="w-full h-16 rounded-[1.5rem] text-lg font-black shadow-xl shadow-brand-500/20" 
                         isLoading={loading}
                     >
-                        Concluir e Acessar Painel <ArrowRight size={20} className="ml-2" />
+                        Criar Perfil e Continuar <ArrowRight size={20} className="ml-2" />
                     </Button>
                 </div>
             </form>

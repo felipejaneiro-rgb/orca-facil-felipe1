@@ -11,7 +11,7 @@ export const companyService = {
       .from('companies')
       .select('*')
       .eq('owner_id', userId)
-      .maybeSingle(); // maybeSingle não gera erro se não encontrar nada
+      .maybeSingle(); 
 
     if (error) {
       console.error("Erro ao buscar empresa:", error);
@@ -23,21 +23,21 @@ export const companyService = {
 
   /**
    * Insere o perfil da empresa no Supabase.
-   * Forçamos o uso do ID da sessão atual para garantir compatibilidade com RLS.
+   * Usamos auth.getUser() no momento do clique para garantir o ID mais recente.
    */
   createCompany: async (userId: string, profile: CompanyProfile): Promise<CompanyProfile> => {
-    // Verificação extra: garantir que o usuário está realmente autenticado no cliente
-    const { data: { user } } = await supabase.auth.getUser();
+    // Busca o usuário da sessão atual para garantir que não há discrepância de ID
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
     
-    if (!user) {
-      throw new Error("Sessão expirada ou usuário não autenticado.");
+    if (authError || !user) {
+      throw new Error("Sessão inválida. Por favor, faça login novamente.");
     }
 
     const { data, error } = await supabase
       .from('companies')
       .insert([
         { 
-          owner_id: user.id, // Usamos o ID vindo direto da sessão validada
+          owner_id: user.id, // UID real vindo da sessão do Supabase
           razao_social: profile.razao_social,
           nome_fantasia: profile.nome_fantasia,
           cnpj: profile.cnpj,
@@ -52,10 +52,13 @@ export const companyService = {
       .single();
 
     if (error) {
-      console.error("Erro RLS/Database (createCompany):", error);
+      console.error("Erro Supabase (createCompany):", error);
+      
+      // Se cair aqui com erro de RLS mesmo após o SQL, o erro 42501 é o código padrão
       if (error.code === '42501') {
-        throw new Error("Erro de permissão (RLS). Verifique as políticas no Supabase.");
+        throw new Error("Erro de permissão (RLS). Certifique-se de executar as políticas de SELECT e INSERT no SQL Editor do Supabase.");
       }
+      
       throw new Error(error.message || "Erro ao salvar dados da empresa.");
     }
 
