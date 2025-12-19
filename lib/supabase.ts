@@ -20,15 +20,16 @@ const supabaseUrl = getEnvVar('VITE_SUPABASE_URL') || PROVIDED_URL;
 const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY') || PROVIDED_ANON_KEY;
 
 /**
- * CONFIGURAÇÃO DE SESSÃO ROBUSTA
- * Priorizamos a estabilidade da sessão sobre a detecção imediata de URL para evitar reloads infinitos.
+ * CONFIGURAÇÃO ESTÁTICA DE SESSÃO
+ * Desabilitamos detectSessionInUrl por padrão para evitar que o React 
+ * limpe o estado ao ver parâmetros de OAuth na URL.
  */
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true, 
-    storageKey: 'orcafacil-auth-v1',
-    flowType: 'pkce' // Mais estável para redirecionamentos OAuth
+    detectSessionInUrl: false, // Evita re-inicializações causadas pela URL
+    storageKey: 'orcafacil-auth-v2',
+    flowType: 'pkce'
   }
 });

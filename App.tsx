@@ -30,14 +30,12 @@ const QuotePreview = lazy(() => import('./components/QuotePreview'));
 type AppView = 'dashboard' | 'editor' | 'history' | 'reports' | 'catalog' | 'clients' | 'onboarding';
 
 const App: React.FC = () => {
-  // --- ESTADOS DE SESSÃO (CONFORME SUGESTÃO) ---
+  // 1. Estados de Autenticação (A sugestão de ouro)
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [appError, setAppError] = useState<string | null>(null);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
   
-  const isFirstLoadRef = useRef(true);
-
+  // 2. Estados de UI
   const [currentView, setCurrentView] = useState<AppView>('dashboard');
   const [currentStep, setCurrentStep] = useState(0);
   const [quoteData, setQuoteData] = useState<QuoteData>(INITIAL_QUOTE);
@@ -45,90 +43,87 @@ const App: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [appError, setAppError] = useState<string | null>(null);
 
   const currentDateDisplay = useMemo(() => 
     new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }),
   []);
 
+  // 3. Inicialização de Dados da Empresa
   const initializeCompany = useCallback(async (userId: string) => {
-    if (defaultCompany) {
-      setLoading(false);
-      return;
-    }
-
     try {
       const company = await companyService.getCompany(userId);
       if (company) {
         setDefaultCompany(company);
-        if (isFirstLoadRef.current) {
-          setCurrentView('dashboard');
-        }
+        setCurrentView('dashboard');
       } else {
+        // Se realmente retornou null (sucesso mas sem dados), vai para o onboarding
         setCurrentView('onboarding');
       }
     } catch (err: any) {
-      console.warn("Erro ao buscar empresa (mantendo sessão):", err);
-      if (isFirstLoadRef.current) setCurrentView('dashboard');
+      console.error("Erro ao carregar empresa:", err);
+      // Em caso de erro de rede, não jogamos para o onboarding (cadastro), 
+      // ficamos no dashboard e mostramos o erro se for persistente.
+      setCurrentView('dashboard');
     } finally {
-      isFirstLoadRef.current = false;
-      setLoading(false);
+      setIsDataLoaded(true);
     }
-  }, [defaultCompany]);
+  }, []);
 
-  // --- PASSO 1 & 2: MONITORAMENTO DE SESSÃO ROBUSTO ---
+  // 4. Efeito de Monitoramento de Sessão (Padrão Sugerido)
   useEffect(() => {
     let mounted = true;
 
-    // Tenta pegar a sessão inicial do disco
+    // Busca sessão inicial
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!mounted) return;
       
       if (session?.user) {
         setCurrentUser(authService.mapSupabaseUser(session.user));
       }
-      setSessionReady(true);
+      setSessionReady(true); // O "Porteiro" libera a entrada
     });
 
-    // Escuta mudanças de estado (login/logout)
-    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+    // Escuta mudanças (Login/Logout/Token Expired)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
 
       if (session?.user) {
-        setCurrentUser(authService.mapSupabaseUser(session.user));
+        const mapped = authService.mapSupabaseUser(session.user);
+        setCurrentUser(mapped);
       } else {
-        // Se realmente não houver sessão, limpa estados mas sem expulsar agressivamente
-        setCurrentUser(null);
-        setDefaultCompany(null);
-        if (event === 'SIGNED_OUT') {
-           setCurrentView('dashboard');
-           isFirstLoadRef.current = true;
+        // Só limpa se o evento for explicitamente de saída ou token inválido
+        if (event === 'SIGNED_OUT' || event === 'USER_UPDATED') {
+          setCurrentUser(null);
+          setDefaultCompany(null);
+          setIsDataLoaded(false);
+          setCurrentView('dashboard');
         }
-        setLoading(false);
       }
+      setSessionReady(true);
     });
 
     return () => {
       mounted = false;
-      listener.subscription.unsubscribe();
+      subscription.unsubscribe();
     };
   }, []);
 
-  // --- PASSO 3: CARREGAMENTO DE DADOS APÓS SESSÃO PRONTA ---
+  // 5. Efeito de Carga de Perfil (Só roda quando a sessão está confirmada)
   useEffect(() => {
-    if (!sessionReady) return;
-
-    if (currentUser) {
+    if (sessionReady && currentUser && !isDataLoaded) {
       initializeCompany(currentUser.id);
-    } else {
-      // Se não tem usuário, para de carregar para mostrar tela de Login
-      setLoading(false);
+    } else if (sessionReady && !currentUser) {
+      // Se não há usuário, não há dados para carregar
+      setIsDataLoaded(true);
     }
-  }, [sessionReady, currentUser, initializeCompany]);
+  }, [sessionReady, currentUser, isDataLoaded, initializeCompany]);
 
   const handleLogout = useCallback(async () => {
       if (confirm('Deseja sair da sua conta?')) {
-        setLoading(true);
+        setSessionReady(false); // Bloqueia a UI para o logout
         await authService.logout();
+        window.location.reload(); // Recarga limpa para garantir reset total
       }
   }, []);
 
@@ -142,9 +137,9 @@ const App: React.FC = () => {
     setQuoteData(p => ({...p, ...d}));
   }, []);
 
+  // 6. Renderizador de Conteúdo (Memoizado para performance)
   const renderViewContent = useMemo(() => {
-    // Não renderiza nada se estiver carregando a sessão inicial ou dados da empresa
-    if (loading) return null;
+    if (!sessionReady || !isDataLoaded) return null;
     
     try {
       switch (currentView) {
@@ -183,56 +178,56 @@ const App: React.FC = () => {
       setAppError(e.message);
       return null;
     }
-  }, [currentView, currentStep, quoteData, currentUser, defaultCompany, navigateToEditor, updateQuoteData, loading]);
+  }, [currentView, currentStep, quoteData, currentUser, defaultCompany, navigateToEditor, updateQuoteData, sessionReady, isDataLoaded]);
 
-  // Tela de Erro Fatal
-  if (appError) {
-    return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 p-4 text-center">
-            <div className="bg-white dark:bg-gray-900 p-8 rounded-3xl shadow-2xl max-w-md border border-red-100">
-                <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
-                <h2 className="text-xl font-bold mb-2 dark:text-white">Algo deu errado</h2>
-                <p className="text-gray-600 dark:text-gray-400 mb-6 text-sm">{appError}</p>
-                <button onClick={() => window.location.reload()} className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2">
-                  <RefreshCw size={18} /> Tentar Novamente
-                </button>
-            </div>
-        </div>
-    );
-  }
+  // --- RENDERS DE ESTADO ---
 
-  // TELA DE CARREGAMENTO (ESTADO INICIAL)
-  if (loading && !currentUser) {
+  // 1. Loader de Inicialização (Obrigatório enquanto sessionReady ou isDataLoaded forem falsos)
+  if (!sessionReady || (currentUser && !isDataLoaded)) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950">
             <div className="relative flex items-center justify-center">
-                <div className="absolute w-16 h-16 border-4 border-brand-100 dark:border-brand-900/30 rounded-full"></div>
-                <Loader2 className="animate-spin text-brand-600" size={64} />
+                <div className="absolute w-20 h-20 border-4 border-brand-100 dark:border-brand-900/20 rounded-full"></div>
+                <Loader2 className="animate-spin text-brand-600" size={48} />
             </div>
-            <div className="mt-8 text-center animate-pulse">
-                <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-xs">Validando Sessão</p>
-                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold">AGUARDE UM INSTANTE...</p>
+            <div className="mt-8 text-center">
+                <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-xs">Sincronizando</p>
+                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold">ESTABELECENDO CONEXÃO SEGURA...</p>
             </div>
         </div>
       );
   }
 
-  // TELA DE LOGIN (MOSTRADA SOMENTE SE sessionReady FOR TRUE E NÃO HOUVER USUÁRIO)
-  if (sessionReady && !currentUser) {
+  // 2. Erro Crítico
+  if (appError) {
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+            <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md text-center">
+                <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
+                <h2 className="text-xl font-bold mb-2">Erro de Carregamento</h2>
+                <p className="text-gray-600 mb-6 text-sm">{appError}</p>
+                <button onClick={() => window.location.reload()} className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold">Reiniciar App</button>
+            </div>
+        </div>
+    );
+  }
+
+  // 3. Tela de Login (Só aparece se sessionReady for true e currentUser for null)
+  if (!currentUser) {
     return (
       <Suspense fallback={null}>
-        <AuthView onLoginSuccess={() => {}} />
+        <AuthView onLoginSuccess={(user) => { setCurrentUser(user); setIsDataLoaded(false); }} />
       </Suspense>
     );
   }
 
-  // TELA DE ONBOARDING (DADOS DA EMPRESA FALTANDO)
+  // 4. Tela de Cadastro de Empresa (Onboarding)
   if (currentView === 'onboarding') {
     return (
       <Suspense fallback={null}>
         <OnboardingView 
-          userId={currentUser!.id} 
-          userEmail={currentUser!.email} 
+          userId={currentUser.id} 
+          userEmail={currentUser.email} 
           onComplete={(company) => {
             setDefaultCompany(company);
             setCurrentView('dashboard');
@@ -242,7 +237,7 @@ const App: React.FC = () => {
     );
   }
 
-  // APLICAÇÃO PRINCIPAL (DASHBOARD/EDITOR)
+  // 5. Aplicativo Principal
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-950 font-sans overflow-hidden antialiased">
       <Sidebar 
@@ -260,18 +255,18 @@ const App: React.FC = () => {
       />
       
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        <header className="h-16 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between px-6 z-30 shrink-0 shadow-sm">
-           <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"><Menu /></button>
+        <header className="h-16 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between px-6 z-30 shrink-0">
+           <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2 text-gray-500"><Menu /></button>
            <div className="flex items-center gap-3">
-              <div className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-sm shadow-green-500/50" />
+              <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
               <h1 className="font-black text-gray-800 dark:text-white tracking-tighter uppercase text-sm">OrçaFácil Admin</h1>
            </div>
-           <div className="hidden md:flex items-center text-xs font-bold text-gray-400 select-none">
+           <div className="hidden md:flex items-center text-xs font-bold text-gray-400">
              {currentDateDisplay}
            </div>
         </header>
         
-        <main className="flex-1 overflow-auto p-4 md:p-8 bg-gray-50 dark:bg-gray-950 scroll-smooth">
+        <main className="flex-1 overflow-auto p-4 md:p-8">
            <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="animate-spin text-brand-600" /></div>}>
             {renderViewContent}
            </Suspense>

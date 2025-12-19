@@ -5,25 +5,31 @@ import { CompanyProfile } from '../types';
 export const companyService = {
   /**
    * Busca a empresa vinculada ao usuário logado pelo owner_id.
-   * Removido o timeout manual para permitir que a rede opere em seu tempo natural.
+   * Modificado para tratar erros de rede sem assumir que a empresa não existe.
    */
   getCompany: async (userId: string): Promise<CompanyProfile | null> => {
     try {
-      const { data, error }: any = await supabase
+      // Pequeno atraso para garantir que o Supabase está pronto para a query
+      await new Promise(r => setTimeout(r, 200));
+
+      const { data, error } = await supabase
         .from('companies')
         .select('*')
         .eq('owner_id', userId)
         .maybeSingle();
 
       if (error) {
-        console.error("Erro Supabase (getCompany):", error);
-        return null; 
+        // Se houve erro de rede/timeout, lançamos para o catch
+        throw error;
       }
 
+      // Se data for null, significa que a query rodou mas não achou nada (Onboarding necessário)
       return data;
-    } catch (e) {
-      console.warn("Erro ao buscar dados da empresa:", e);
-      return null;
+    } catch (e: any) {
+      console.warn("Falha na comunicação com o banco:", e.message);
+      // Lança o erro para que o App.tsx possa decidir se tenta novamente 
+      // ou se mantém o usuário no Dashboard com dados locais se houver.
+      throw e; 
     }
   },
 
@@ -34,7 +40,7 @@ export const companyService = {
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     
     if (authError || !user) {
-      throw new Error("Sessão inválida. Por favor, tente fazer login novamente.");
+      throw new Error("Sessão inválida para cadastro.");
     }
 
     const { data, error } = await supabase
@@ -56,8 +62,8 @@ export const companyService = {
       .single();
 
     if (error) {
-      console.error("Erro Supabase (createCompany):", error);
-      throw new Error(error.message || "Não foi possível salvar os dados da empresa.");
+      console.error("Erro ao criar empresa:", error);
+      throw new Error(error.message || "Erro ao salvar perfil.");
     }
 
     return data;
