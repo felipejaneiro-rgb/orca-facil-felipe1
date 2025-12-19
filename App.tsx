@@ -8,8 +8,7 @@ import { companyService } from './services/companyService';
 import { supabase } from './lib/supabase';
 import { 
   Loader2, 
-  Menu,
-  AlertCircle
+  Menu
 } from 'lucide-react';
 
 // Lazy Load components
@@ -32,7 +31,7 @@ const AUTH_STORAGE_KEY = 'orcafacil-auth-v2';
 const COMPANY_CACHE_KEY = 'orcafacil-company-cache';
 
 const App: React.FC = () => {
-  // 1. INICIALIZAÇÃO INSTANTÂNEA (SEM ESPERAR API)
+  // 1. CARREGAMENTO IMEDIATO DO DISCO (SEM ESPERAR API)
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
       const saved = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -55,10 +54,10 @@ const App: React.FC = () => {
     }
   });
 
-  // Se já temos usuário e empresa no cache, o app começa pronto (loading = false)
+  // Estados de controle (Não bloqueantes se houver cache)
   const [sessionReady, setSessionReady] = useState(!!currentUser);
   const [isDataLoaded, setIsDataLoaded] = useState(!!defaultCompany);
-  const [loading, setLoading] = useState(!currentUser); // Só mostra loader se não tiver nada no cache
+  const [loading, setLoading] = useState(!currentUser); // Só bloqueia se não tiver NADA no cache
   
   const [currentView, setCurrentView] = useState<AppView>('dashboard');
   const [currentStep, setCurrentStep] = useState(0);
@@ -71,19 +70,19 @@ const App: React.FC = () => {
     new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }),
   []);
 
-  // 2. BUSCA DE DADOS EM SEGUNDO PLANO (SILENCIOSA)
-  const syncCompanyData = useCallback(async (userId: string) => {
+  // 2. SINCRONIZAÇÃO SILENCIOSA EM SEGUNDO PLANO
+  const syncInBackground = useCallback(async (userId: string) => {
     try {
       const company = await companyService.getCompany(userId);
       if (company) {
-        setDefaultCompany(company);
-        localStorage.setItem(COMPANY_CACHE_KEY, JSON.stringify(company));
-        setIsDataLoaded(true);
+          setDefaultCompany(company);
+          localStorage.setItem(COMPANY_CACHE_KEY, JSON.stringify(company));
+          setIsDataLoaded(true);
       } else {
-        setCurrentView('onboarding');
+          setCurrentView('onboarding');
       }
-    } catch (err: any) {
-      console.warn("Falha na sincronização de background:", err);
+    } catch (err) {
+      console.warn("Background sync failed (offline or network lag)");
     } finally {
       setLoading(false);
     }
@@ -92,15 +91,14 @@ const App: React.FC = () => {
   useEffect(() => {
     let mounted = true;
 
-    // Sincronização Silenciosa de Sessão
+    // Verifica a sessão uma única vez ao montar de forma otimista
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!mounted) return;
       if (session?.user) {
         const user = authService.mapSupabaseUser(session.user);
         setCurrentUser(user);
         setSessionReady(true);
-        // Se ainda não temos a empresa no cache, busca agora
-        if (!defaultCompany) syncCompanyData(user.id);
+        syncInBackground(user.id);
       } else {
         setLoading(false);
         setSessionReady(true);
@@ -118,6 +116,7 @@ const App: React.FC = () => {
         localStorage.removeItem(COMPANY_CACHE_KEY);
         setIsDataLoaded(false);
         setSessionReady(true);
+        setLoading(false);
       }
     });
 
@@ -125,7 +124,7 @@ const App: React.FC = () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [syncCompanyData, defaultCompany]);
+  }, [syncInBackground]);
 
   const handleLogout = useCallback(async () => {
       if (confirm('Deseja sair da sua conta?')) {
@@ -189,9 +188,7 @@ const App: React.FC = () => {
     }
   }, [currentView, currentStep, quoteData, currentUser, defaultCompany, navigateToEditor, updateQuoteData]);
 
-  // 3. RENDER LÓGICO
-  
-  // Se não tem usuário no cache E ainda estamos carregando, mostra loader
+  // Se o usuário já está no cache, NÃO mostramos o loader, entramos direto
   if (loading && !currentUser) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950">
@@ -200,7 +197,7 @@ const App: React.FC = () => {
       );
   }
 
-  // Se não tem usuário logado (confirmado pelo Supabase), mostra Login
+  // Se não tem usuário (confirmado), mostra Login
   if (sessionReady && !currentUser) {
     return (
       <Suspense fallback={null}>
@@ -209,8 +206,8 @@ const App: React.FC = () => {
     );
   }
 
-  // Se logado mas sem empresa (confirmado pelo Supabase), mostra Onboarding
-  if (sessionReady && currentUser && isDataLoaded === false && currentView === 'onboarding') {
+  // Se tem usuário mas sem empresa (confirmado), mostra Onboarding
+  if (sessionReady && currentUser && !isDataLoaded && currentView === 'onboarding') {
     return (
       <Suspense fallback={null}>
         <OnboardingView 

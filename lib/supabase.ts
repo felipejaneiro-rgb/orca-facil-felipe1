@@ -28,7 +28,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: false, // Evita re-inicializações causadas pela URL
+    detectSessionInUrl: false,
     storageKey: 'orcafacil-auth-v2',
     flowType: 'pkce'
   }
