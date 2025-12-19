@@ -44,7 +44,7 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Inicializa dados da empresa com trava de segurança
+  // Inicializa dados da empresa
   const loadCompanyData = useCallback(async (userId: string) => {
     try {
       const company = await companyService.getCompany(userId);
@@ -56,13 +56,19 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Erro ao carregar empresa:", err);
-      // Em caso de erro, permitimos ir para o onboarding para não travar o usuário
       setCurrentView('onboarding');
     }
   }, []);
 
   useEffect(() => {
-    // SINGLE SOURCE OF TRUTH: Apenas o onAuthStateChange gerencia o fluxo
+    // FAIL-SAFE: Se o app não carregar em 6 segundos, libera a tela para login
+    const timer = setTimeout(() => {
+        if (loading) {
+            console.warn("Fail-safe ativado: Carregamento demorou demais.");
+            setLoading(false);
+        }
+    }, 6000);
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log(`Auth Event: ${event}`);
       
@@ -71,12 +77,16 @@ const App: React.FC = () => {
           initializingRef.current = true;
           setLoading(true);
           
-          const user = authService.mapSupabaseUser(session.user);
-          setCurrentUser(user);
-          await loadCompanyData(user.id);
-          
-          setLoading(false);
-          initializingRef.current = false;
+          try {
+            const user = authService.mapSupabaseUser(session.user);
+            setCurrentUser(user);
+            await loadCompanyData(user.id);
+          } catch (e) {
+            console.error("Erro na inicialização de dados:", e);
+          } finally {
+            setLoading(false);
+            initializingRef.current = false;
+          }
         } else if (!session) {
           setLoading(false);
         }
@@ -85,11 +95,15 @@ const App: React.FC = () => {
         setDefaultCompany(null);
         setLoading(false);
         initializingRef.current = false;
+        setCurrentView('dashboard');
       }
     });
 
-    return () => subscription.unsubscribe();
-  }, [loadCompanyData]);
+    return () => {
+        subscription.unsubscribe();
+        clearTimeout(timer);
+    };
+  }, [loadCompanyData, loading]);
 
   const handleLogout = async () => {
       if (confirm('Deseja sair da sua conta?')) {
@@ -112,7 +126,6 @@ const App: React.FC = () => {
     );
   }
 
-  // Loader Único e Centralizado
   if (loading) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950">
@@ -120,26 +133,22 @@ const App: React.FC = () => {
                 <div className="absolute w-16 h-16 border-4 border-brand-100 dark:border-brand-900/30 rounded-full"></div>
                 <Loader2 className="animate-spin text-brand-600" size={64} />
             </div>
-            <div className="mt-8 text-center animate-pulse">
-                <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-xs">OrçaFácil</p>
-                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold">CARREGANDO AMBIENTE...</p>
+            <div className="mt-8 text-center">
+                <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-xs">OrçaFácil Admin</p>
+                <p className="text-gray-400 dark:text-gray-500 text-[10px] mt-1 font-bold animate-pulse">SINCRONIZANDO DADOS...</p>
             </div>
         </div>
       );
   }
 
-  // Se não tem usuário logado, mostra Tela de Auth
   if (!currentUser) {
     return (
       <Suspense fallback={null}>
-        <AuthView onLoginSuccess={(user) => {
-            // A lógica de SIGNED_IN do onAuthStateChange cuidará do resto
-        }} />
+        <AuthView onLoginSuccess={() => {}} />
       </Suspense>
     );
   }
 
-  // Se logado mas sem empresa cadastrada
   if (currentView === 'onboarding') {
     return (
       <Suspense fallback={null}>
