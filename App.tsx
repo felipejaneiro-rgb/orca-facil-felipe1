@@ -3,18 +3,14 @@ import React, { useState, useEffect, Suspense, lazy, useCallback } from 'react';
 import { QuoteData, INITIAL_QUOTE, CompanyProfile, User } from './types';
 import StepIndicator from './components/StepIndicator';
 import Sidebar from './components/Sidebar'; 
-import { storageService } from './services/storageService';
 import { authService } from './services/authService';
 import { companyService } from './services/companyService';
-import { useDebounce } from './hooks/useDebounce';
 import { supabase } from './lib/supabase';
 import { 
-  ArrowRight, 
-  ArrowLeft, 
-  Save, 
   Loader2, 
   Menu,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from 'lucide-react';
 
 // Lazy Load components
@@ -30,41 +26,30 @@ const CompanyForm = lazy(() => import('./components/CompanyForm'));
 const ClientForm = lazy(() => import('./components/ClientForm'));
 const ItemsForm = lazy(() => import('./components/ItemsForm'));
 const QuotePreview = lazy(() => import('./components/QuotePreview'));
-const PublicQuoteView = lazy(() => import('./components/PublicQuoteView'));
 
-const CompanySettingsModal = lazy(() => import('./components/CompanySettingsModal'));
-
-const STORAGE_KEY = 'orcaFacil_data'; 
 const STORAGE_KEY_PROFILE = 'orcaFacil_profile';
-const STORAGE_KEY_THEME = 'orcaFacil_theme';
 
-type AppView = 'dashboard' | 'editor' | 'history' | 'reports' | 'catalog' | 'clients' | 'public-view' | 'onboarding';
+type AppView = 'dashboard' | 'editor' | 'history' | 'reports' | 'catalog' | 'clients' | 'onboarding';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [isAuthChecking, setIsAuthChecking] = useState(false);
   const [isCheckingCompany, setIsCheckingCompany] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
 
-  const [currentView, setCurrentView] = useState<AppView>(() => {
-    const hash = window.location.hash;
-    if (hash.startsWith('#public-view') || hash.startsWith('#v/')) return 'public-view';
-    return 'dashboard';
-  });
-
+  const [currentView, setCurrentView] = useState<AppView>('dashboard');
   const [currentStep, setCurrentStep] = useState(0);
   const [quoteData, setQuoteData] = useState<QuoteData>(INITIAL_QUOTE);
-  const [defaultCompany, setDefaultCompany] = useState<CompanyProfile>(INITIAL_QUOTE.company);
+  const [defaultCompany, setDefaultCompany] = useState<CompanyProfile | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
 
-  const checkCompanyRegistration = useCallback(async (userId: string) => {
-    if (currentView === 'public-view') return;
+  const loadCompanyAndStart = useCallback(async (user: User) => {
     setIsCheckingCompany(true);
+    setAppError(null);
     try {
-      const company = await companyService.getCompany(userId);
+      const company = await companyService.getCompany(user.id);
       if (company) {
         setDefaultCompany(company);
         localStorage.setItem(STORAGE_KEY_PROFILE, JSON.stringify(company));
@@ -72,40 +57,36 @@ const App: React.FC = () => {
       } else {
         setCurrentView('onboarding');
       }
-    } catch (err) {
-      console.error("Erro ao verificar empresa:", err);
-      // Se der erro, não quebramos a tela, mandamos para onboarding por segurança
+    } catch (err: any) {
+      console.error("Erro Crítico no Carregamento:", err);
+      // Se não achar a empresa, manda pro onboarding em vez de dar tela branca
       setCurrentView('onboarding');
     } finally {
       setIsCheckingCompany(false);
     }
-  }, [currentView]);
+  }, []);
 
   useEffect(() => {
-    authService.getCurrentUser().then(user => {
-      setCurrentUser(user);
-      if (user) checkCompanyRegistration(user.id);
-      setIsAuthChecking(false);
-    });
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session?.user) {
+      if (event === 'SIGNED_IN' && session?.user) {
         const user = authService.mapSupabaseUser(session.user);
         setCurrentUser(user);
-        checkCompanyRegistration(user.id);
-      } else {
+        loadCompanyAndStart(user);
+      } else if (event === 'SIGNED_OUT') {
         setCurrentUser(null);
+        setDefaultCompany(null);
+        setCurrentView('dashboard');
       }
-      setIsAuthChecking(false);
     });
 
     return () => subscription.unsubscribe();
-  }, [checkCompanyRegistration]);
+  }, [loadCompanyAndStart]);
 
-  const handleOnboardingComplete = (company: CompanyProfile) => {
-      setDefaultCompany(company);
-      localStorage.setItem(STORAGE_KEY_PROFILE, JSON.stringify(company));
-      setCurrentView('dashboard');
+  const handleLoginSuccess = (user?: User) => {
+      if (user) {
+          setCurrentUser(user);
+          loadCompanyAndStart(user);
+      }
   };
 
   const handleLogout = async () => {
@@ -115,15 +96,20 @@ const App: React.FC = () => {
       }
   };
 
-  // Se houver um erro crítico de renderização
+  // Escudo contra Tela Branca
   if (appError) {
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
-            <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md text-center">
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 p-4">
+            <div className="bg-white dark:bg-gray-900 p-8 rounded-3xl shadow-2xl max-w-md text-center border border-red-100 dark:border-red-900/20">
                 <AlertCircle size={48} className="text-red-500 mx-auto mb-4" />
-                <h2 className="text-xl font-bold mb-2">Algo deu errado</h2>
-                <p className="text-gray-600 mb-6">{appError}</p>
-                <button onClick={() => window.location.reload()} className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold">Recarregar Aplicativo</button>
+                <h2 className="text-xl font-bold mb-2 dark:text-white">Ops! Ocorreu um erro</h2>
+                <p className="text-gray-600 dark:text-gray-400 mb-6 text-sm">{appError}</p>
+                <button 
+                  onClick={() => window.location.reload()} 
+                  className="w-full bg-brand-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-brand-700 transition-colors"
+                >
+                  <RefreshCw size={18} /> Recarregar Aplicativo
+                </button>
             </div>
         </div>
     );
@@ -133,56 +119,103 @@ const App: React.FC = () => {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950">
             <Loader2 className="animate-spin text-brand-600 mb-4" size={48} />
-            <p className="text-gray-500 font-medium">Carregando OrçaFácil...</p>
+            <p className="text-gray-500 dark:text-gray-400 font-medium">Preparando seu ambiente...</p>
         </div>
       );
   }
 
-  if (!currentUser) return <Suspense fallback={null}><AuthView onLoginSuccess={() => {}} /></Suspense>;
+  if (!currentUser) {
+    return (
+      <Suspense fallback={null}>
+        <AuthView onLoginSuccess={handleLoginSuccess} />
+      </Suspense>
+    );
+  }
 
-  if (currentView === 'onboarding') return <Suspense fallback={null}><OnboardingView userId={currentUser.id} userEmail={currentUser.email} onComplete={handleOnboardingComplete} /></Suspense>;
+  if (currentView === 'onboarding') {
+    return (
+      <Suspense fallback={null}>
+        <OnboardingView 
+          userId={currentUser.id} 
+          userEmail={currentUser.email} 
+          onComplete={(company) => {
+            setDefaultCompany(company);
+            setCurrentView('dashboard');
+          }} 
+        />
+      </Suspense>
+    );
+  }
 
   const renderContent = () => {
-      try {
-        if (currentView === 'dashboard') return <DashboardView user={currentUser} onNavigate={(v: any) => setCurrentView(v)} onLoadQuote={(q) => { setQuoteData(q); setCurrentView('editor'); setCurrentStep(3); }} onNewQuote={() => setCurrentView('editor')} />;
-        if (currentView === 'history') return <HistoryModal isOpen={true} onClose={() => setCurrentView('dashboard')} onLoadQuote={(q) => { setQuoteData(q); setCurrentView('editor'); setCurrentStep(3); }} />;
-        if (currentView === 'reports') return <ReportsView />;
-        if (currentView === 'catalog') return <CatalogView />;
-        if (currentView === 'clients') return <ClientsView />;
-        
-        return (
+    try {
+      switch (currentView) {
+        case 'dashboard':
+          return <DashboardView user={currentUser} onNavigate={setCurrentView} onLoadQuote={(q) => { setQuoteData(q); setCurrentView('editor'); setCurrentStep(3); }} onNewQuote={() => { setQuoteData(INITIAL_QUOTE); setCurrentView('editor'); setCurrentStep(0); }} />;
+        case 'history':
+          return <HistoryModal isOpen={true} onClose={() => setCurrentView('dashboard')} onLoadQuote={(q) => { setQuoteData(q); setCurrentView('editor'); setCurrentStep(3); }} />;
+        case 'reports':
+          return <ReportsView />;
+        case 'catalog':
+          return <CatalogView />;
+        case 'clients':
+          return <ClientsView />;
+        case 'editor':
+          return (
             <div className="max-w-4xl mx-auto pb-10">
                 <StepIndicator currentStep={currentStep} onStepClick={setCurrentStep} />
                 <div className="mt-6">
-                    {currentStep === 0 && <CompanyForm data={quoteData} updateData={(d) => setQuoteData(p => ({...p, ...d}))} defaultCompany={defaultCompany} />}
+                    {currentStep === 0 && <CompanyForm data={quoteData} updateData={(d) => setQuoteData(p => ({...p, ...d}))} defaultCompany={defaultCompany || undefined} />}
                     {currentStep === 1 && <ClientForm data={quoteData} updateData={(d) => setQuoteData(p => ({...p, ...d}))} />}
                     {currentStep === 2 && <ItemsForm data={quoteData} updateData={(d) => setQuoteData(p => ({...p, ...d}))} />}
                     {currentStep === 3 && <QuotePreview data={quoteData} onEdit={() => setCurrentStep(2)} onApprove={() => {}} />}
                 </div>
                 {currentStep < 3 && (
-                    <div className="mt-8 flex justify-between pt-6 border-t border-gray-200 dark:border-gray-700">
-                        <button onClick={() => setCurrentStep(p => Math.max(0, p-1))} disabled={currentStep === 0} className="px-6 py-3 rounded-lg font-medium text-gray-600 disabled:opacity-30">Voltar</button>
-                        <button onClick={() => setCurrentStep(p => Math.min(3, p+1))} className="bg-brand-600 px-8 py-3 rounded-lg text-white font-bold shadow-lg">Próximo</button>
+                    <div className="mt-8 flex justify-between pt-6 border-t border-gray-100 dark:border-gray-800">
+                        <button onClick={() => setCurrentStep(p => Math.max(0, p-1))} disabled={currentStep === 0} className="px-6 py-3 rounded-xl font-bold text-gray-400 disabled:opacity-30 hover:text-gray-600 transition-colors">Voltar</button>
+                        <button onClick={() => setCurrentStep(p => Math.min(3, p+1))} className="bg-brand-600 hover:bg-brand-700 px-10 py-3 rounded-xl text-white font-black shadow-lg shadow-brand-500/20 transition-all active:scale-95">Próximo</button>
                     </div>
                 )}
             </div>
-        );
-      } catch (e) {
-          setAppError("Falha ao renderizar componente: " + (e as Error).message);
+          );
+        default:
           return null;
       }
+    } catch (e: any) {
+      setAppError("Falha na renderização do componente: " + e.message);
+      return null;
+    }
   };
 
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-950 font-sans overflow-hidden">
-      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} currentView={currentView} onNavigate={(v: any) => setCurrentView(v)} onNewQuote={() => {}} onToggleTheme={() => {}} isDarkMode={isDarkMode} onLogout={handleLogout} currentUser={currentUser} hasActiveDraft={false} setShowSettings={setShowSettings} />
+      <Sidebar 
+        isOpen={isSidebarOpen} 
+        onClose={() => setIsSidebarOpen(false)} 
+        currentView={currentView} 
+        onNavigate={setCurrentView} 
+        onNewQuote={() => { setQuoteData(INITIAL_QUOTE); setCurrentView('editor'); setCurrentStep(0); }} 
+        onToggleTheme={() => setIsDarkMode(!isDarkMode)} 
+        isDarkMode={isDarkMode} 
+        onLogout={handleLogout} 
+        currentUser={currentUser} 
+        hasActiveDraft={false} 
+        setShowSettings={setShowSettings} 
+      />
+      
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        <header className="h-16 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between px-4 z-30 shrink-0">
-           <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2"><Menu /></button>
-           <h1 className="font-bold">OrçaFácil</h1>
-           <div />
+        <header className="h-16 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between px-6 z-30 shrink-0">
+           <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2 text-gray-500"><Menu /></button>
+           <div className="flex items-center gap-3">
+              <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
+              <h1 className="font-black text-gray-800 dark:text-white tracking-tighter uppercase text-sm">OrçaFácil Admin</h1>
+           </div>
+           <div className="hidden md:flex items-center text-xs font-bold text-gray-400">
+             {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
+           </div>
         </header>
-        <main className="flex-1 overflow-auto p-4 md:p-8">
+        
+        <main className="flex-1 overflow-auto p-4 md:p-8 bg-gray-50 dark:bg-gray-950">
            <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="animate-spin text-brand-600" /></div>}>
             {renderContent()}
            </Suspense>
