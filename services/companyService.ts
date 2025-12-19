@@ -5,30 +5,20 @@ import { CompanyProfile } from '../types';
 export const companyService = {
   /**
    * Busca a empresa vinculada ao usuário logado pelo owner_id.
-   * Modificado para tratar erros de rede sem assumir que a empresa não existe.
+   * Modificado para ser uma função pura de busca no banco.
    */
   getCompany: async (userId: string): Promise<CompanyProfile | null> => {
     try {
-      // Pequeno atraso para garantir que o Supabase está pronto para a query
-      await new Promise(r => setTimeout(r, 200));
-
       const { data, error } = await supabase
         .from('companies')
         .select('*')
         .eq('owner_id', userId)
         .maybeSingle();
 
-      if (error) {
-        // Se houve erro de rede/timeout, lançamos para o catch
-        throw error;
-      }
-
-      // Se data for null, significa que a query rodou mas não achou nada (Onboarding necessário)
+      if (error) throw error;
       return data;
     } catch (e: any) {
-      console.warn("Falha na comunicação com o banco:", e.message);
-      // Lança o erro para que o App.tsx possa decidir se tenta novamente 
-      // ou se mantém o usuário no Dashboard com dados locais se houver.
+      console.warn("Erro ao buscar empresa no Supabase:", e.message);
       throw e; 
     }
   },

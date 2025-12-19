@@ -9,8 +9,7 @@ import { supabase } from './lib/supabase';
 import { 
   Loader2, 
   Menu,
-  AlertCircle,
-  RefreshCw
+  AlertCircle
 } from 'lucide-react';
 
 // Lazy Load components
@@ -29,11 +28,11 @@ const QuotePreview = lazy(() => import('./components/QuotePreview'));
 
 type AppView = 'dashboard' | 'editor' | 'history' | 'reports' | 'catalog' | 'clients' | 'onboarding';
 
-// Chave idêntica à definida no lib/supabase.ts
 const AUTH_STORAGE_KEY = 'orcafacil-auth-v2';
+const COMPANY_CACHE_KEY = 'orcafacil-company-cache';
 
 const App: React.FC = () => {
-  // --- INICIALIZAÇÃO SÍNCRONA (A CHAVE DO PROBLEMA) ---
+  // 1. INICIALIZAÇÃO INSTANTÂNEA (SEM ESPERAR API)
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
       const saved = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -43,102 +42,97 @@ const App: React.FC = () => {
           return authService.mapSupabaseUser(parsed.currentSession.user);
         }
       }
-    } catch (e) {
-      console.warn("Erro ao ler sessão local inicial");
-    }
+    } catch (e) {}
     return null;
   });
 
-  const [sessionReady, setSessionReady] = useState(false);
-  const [isDataLoaded, setIsDataLoaded] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [defaultCompany, setDefaultCompany] = useState<CompanyProfile | null>(() => {
+    try {
+      const cached = localStorage.getItem(COMPANY_CACHE_KEY);
+      return cached ? JSON.parse(cached) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
+  // Se já temos usuário e empresa no cache, o app começa pronto (loading = false)
+  const [sessionReady, setSessionReady] = useState(!!currentUser);
+  const [isDataLoaded, setIsDataLoaded] = useState(!!defaultCompany);
+  const [loading, setLoading] = useState(!currentUser); // Só mostra loader se não tiver nada no cache
   
-  // Estados de UI
   const [currentView, setCurrentView] = useState<AppView>('dashboard');
   const [currentStep, setCurrentStep] = useState(0);
   const [quoteData, setQuoteData] = useState<QuoteData>(INITIAL_QUOTE);
-  const [defaultCompany, setDefaultCompany] = useState<CompanyProfile | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
 
   const currentDateDisplay = useMemo(() => 
     new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }),
   []);
 
-  // Inicialização de Dados da Empresa
-  const initializeCompany = useCallback(async (userId: string) => {
+  // 2. BUSCA DE DADOS EM SEGUNDO PLANO (SILENCIOSA)
+  const syncCompanyData = useCallback(async (userId: string) => {
     try {
       const company = await companyService.getCompany(userId);
       if (company) {
         setDefaultCompany(company);
-        setCurrentView('dashboard');
+        localStorage.setItem(COMPANY_CACHE_KEY, JSON.stringify(company));
+        setIsDataLoaded(true);
       } else {
         setCurrentView('onboarding');
       }
     } catch (err: any) {
-      console.warn("Empresa não carregada, mantendo no Dashboard:", err);
-      setCurrentView('dashboard');
+      console.warn("Falha na sincronização de background:", err);
     } finally {
-      setIsDataLoaded(true);
       setLoading(false);
     }
   }, []);
 
-  // Monitoramento de Sessão (Padrão Robusto)
   useEffect(() => {
     let mounted = true;
 
-    // Sincroniza com a verdade do Supabase
+    // Sincronização Silenciosa de Sessão
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!mounted) return;
-      
       if (session?.user) {
-        setCurrentUser(authService.mapSupabaseUser(session.user));
+        const user = authService.mapSupabaseUser(session.user);
+        setCurrentUser(user);
+        setSessionReady(true);
+        // Se ainda não temos a empresa no cache, busca agora
+        if (!defaultCompany) syncCompanyData(user.id);
       } else {
-        setCurrentUser(null);
+        setLoading(false);
+        setSessionReady(true);
       }
-      setSessionReady(true);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
-
       if (session?.user) {
         setCurrentUser(authService.mapSupabaseUser(session.user));
-      } else {
-        if (event === 'SIGNED_OUT') {
-          setCurrentUser(null);
-          setDefaultCompany(null);
-          setIsDataLoaded(false);
-          setCurrentView('dashboard');
-        }
+        setSessionReady(true);
+      } else if (event === 'SIGNED_OUT') {
+        setCurrentUser(null);
+        setDefaultCompany(null);
+        localStorage.removeItem(COMPANY_CACHE_KEY);
+        setIsDataLoaded(false);
+        setSessionReady(true);
       }
-      setSessionReady(true);
     });
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
-
-  // Carga de Perfil após sessão pronta
-  useEffect(() => {
-    if (sessionReady && currentUser && !isDataLoaded) {
-      initializeCompany(currentUser.id);
-    } else if (sessionReady && !currentUser) {
-      setIsDataLoaded(true);
-      setLoading(false);
-    }
-  }, [sessionReady, currentUser, isDataLoaded, initializeCompany]);
+  }, [syncCompanyData, defaultCompany]);
 
   const handleLogout = useCallback(async () => {
       if (confirm('Deseja sair da sua conta?')) {
         setLoading(true);
         await authService.logout();
         localStorage.removeItem(AUTH_STORAGE_KEY);
+        localStorage.removeItem(COMPANY_CACHE_KEY);
         window.location.reload();
       }
   }, []);
@@ -154,7 +148,7 @@ const App: React.FC = () => {
   }, []);
 
   const renderViewContent = useMemo(() => {
-    if (!sessionReady && !currentUser) return null;
+    if (!currentUser) return null;
     
     try {
       switch (currentView) {
@@ -193,34 +187,30 @@ const App: React.FC = () => {
       setAppError(e.message);
       return null;
     }
-  }, [currentView, currentStep, quoteData, currentUser, defaultCompany, navigateToEditor, updateQuoteData, sessionReady]);
+  }, [currentView, currentStep, quoteData, currentUser, defaultCompany, navigateToEditor, updateQuoteData]);
 
-  // Loader de Inicialização
+  // 3. RENDER LÓGICO
+  
+  // Se não tem usuário no cache E ainda estamos carregando, mostra loader
   if (loading && !currentUser) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950">
-            <div className="relative flex items-center justify-center">
-                <div className="absolute w-20 h-20 border-4 border-brand-100 dark:border-brand-900/20 rounded-full"></div>
-                <Loader2 className="animate-spin text-brand-600" size={48} />
-            </div>
-            <div className="mt-8 text-center animate-pulse">
-                <p className="text-gray-800 dark:text-white font-black tracking-widest uppercase text-[10px]">Restaurando Sessão</p>
-            </div>
+            <Loader2 className="animate-spin text-brand-600" size={48} />
         </div>
       );
   }
 
-  // Tela de Login
+  // Se não tem usuário logado (confirmado pelo Supabase), mostra Login
   if (sessionReady && !currentUser) {
     return (
       <Suspense fallback={null}>
-        <AuthView onLoginSuccess={(user) => { setCurrentUser(user); setIsDataLoaded(false); }} />
+        <AuthView onLoginSuccess={(user) => { setCurrentUser(user); setLoading(true); }} />
       </Suspense>
     );
   }
 
-  // Tela de Onboarding
-  if (currentView === 'onboarding' && currentUser) {
+  // Se logado mas sem empresa (confirmado pelo Supabase), mostra Onboarding
+  if (sessionReady && currentUser && isDataLoaded === false && currentView === 'onboarding') {
     return (
       <Suspense fallback={null}>
         <OnboardingView 
@@ -228,6 +218,8 @@ const App: React.FC = () => {
           userEmail={currentUser.email} 
           onComplete={(company) => {
             setDefaultCompany(company);
+            localStorage.setItem(COMPANY_CACHE_KEY, JSON.stringify(company));
+            setIsDataLoaded(true);
             setCurrentView('dashboard');
           }} 
         />
@@ -235,7 +227,6 @@ const App: React.FC = () => {
     );
   }
 
-  // Aplicativo Principal
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-950 font-sans overflow-hidden antialiased">
       <Sidebar 
@@ -249,7 +240,7 @@ const App: React.FC = () => {
         onLogout={handleLogout} 
         currentUser={currentUser} 
         hasActiveDraft={false} 
-        setShowSettings={setShowSettings} 
+        setShowSettings={() => {}} 
       />
       
       <div className="flex-1 flex flex-col h-full overflow-hidden">
