@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { CompanyProfile } from '../types';
 import { 
@@ -68,7 +67,8 @@ const CompanySettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
     alert(t.common.saved);
   };
 
-  const handlePasswordChange = (e: React.FormEvent) => {
+  // Fixed handlePasswordChange to be async and await authService.getCurrentUser() to fix type error
+  const handlePasswordChange = async (e: React.FormEvent) => {
       e.preventDefault();
       if (passwords.new !== passwords.confirm) {
           setPassMessage({ type: 'error', text: 'As senhas não coincidem.' });
@@ -80,9 +80,11 @@ const CompanySettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
       }
 
       try {
-          const user = authService.getCurrentUser();
+          // Awaiting the currentUser promise to correctly access user properties
+          const user = await authService.getCurrentUser();
           if (user) {
-              authService.updatePassword(user.id, passwords.new);
+              // Using updated updatePassword method that manages the session user automatically
+              await authService.updatePassword(passwords.new);
               setPassMessage({ type: 'success', text: 'Senha alterada com sucesso!' });
               setPasswords({ new: '', confirm: '' });
           }
@@ -171,7 +173,7 @@ const CompanySettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
             </div>
 
             {/* Navigation List */}
-            <nav className="flex md:flex-col overflow-x-auto md:overflow-visible p-2 md:p-4 space-x-2 md:space-x-0 md:space-y-1 no-scrollbar bg-gray-50 md:bg-transparent dark:bg-gray-900/50 md:dark:bg-transparent">
+            <nav className="flex md:flex-col overflow-x-auto md:overflow-visible p-2 md:p-4 space-x-2 md:space-y-1 no-scrollbar bg-gray-50 md:bg-transparent dark:bg-gray-900/50 md:dark:bg-transparent">
                 {menuItems.map((item) => {
                     const Icon = item.icon;
                     const isActive = activeTab === item.id;

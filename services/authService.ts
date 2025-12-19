@@ -1,110 +1,82 @@
 
+import { supabase } from '../lib/supabase';
 import { User } from '../types';
-
-const USERS_KEY = 'orcaFacil_users';
-const SESSION_KEY = 'orcaFacil_session';
 
 export const authService = {
   
-  getUsers: (): User[] => {
-    try {
-      const raw = localStorage.getItem(USERS_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
-  },
-
-  getCurrentUser: (): User | null => {
-    try {
-      const sessionId = localStorage.getItem(SESSION_KEY);
-      if (!sessionId) return null;
-      
-      const users = authService.getUsers();
-      return users.find(u => u.id === sessionId) || null;
-    } catch {
-      return null;
-    }
-  },
-
-  register: (userData: Omit<User, 'id' | 'createdAt' | 'passwordHash'> & { password: string }): User => {
-    const users = authService.getUsers();
-    
-    // Check duplication (Email or CNPJ)
-    if (users.some(u => u.email.toLowerCase() === userData.email.toLowerCase())) {
-      throw new Error('E-mail já cadastrado.');
-    }
-    if (users.some(u => u.document === userData.document)) {
-      throw new Error('CNPJ já cadastrado.');
-    }
-
-    // Simple Hash (Simulation) - In production use bcrypt
-    const passwordHash = btoa(userData.password);
-
-    const newUser: User = {
-      id: crypto.randomUUID(),
-      ...userData,
-      passwordHash,
-      createdAt: new Date().toISOString()
+  // Transforma o usuário do Supabase no formato interno do App
+  mapSupabaseUser: (sbUser: any): User => {
+    return {
+      id: sbUser.id,
+      name: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || 'Usuário Google',
+      email: sbUser.email || '',
+      document: sbUser.user_metadata?.document || '', // Campos adicionais podem ser vindo do profile/metadata
+      whatsapp: sbUser.user_metadata?.phone || '',
+      website: sbUser.user_metadata?.website || '',
+      passwordHash: '', // Não usado com OAuth
+      createdAt: sbUser.created_at
     };
-
-    users.push(newUser);
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
-    
-    // Auto login
-    localStorage.setItem(SESSION_KEY, newUser.id);
-    
-    return newUser;
   },
 
-  login: (email: string, password: string, remember: boolean): User => {
-    const users = authService.getUsers();
-    
-    // Find by Email
-    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase().trim());
-    
-    if (!user) {
-      throw new Error('Usuário não encontrado.');
-    }
-
-    const inputHash = btoa(password);
-    if (user.passwordHash !== inputHash) {
-      throw new Error('Senha incorreta.');
-    }
-
-    localStorage.setItem(SESSION_KEY, user.id);
-    return user;
+  getCurrentUser: async (): Promise<User | null> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) return null;
+    return authService.mapSupabaseUser(session.user);
   },
 
-  logout: () => {
-    localStorage.removeItem(SESSION_KEY);
+  loginWithGoogle: async () => {
+    // Definimos a URL de redirecionamento explicitamente. 
+    // Em alguns sandboxes, window.location.origin pode não ser suficiente.
+    const redirectTo = window.location.origin + window.location.pathname;
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: redirectTo,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+      }
+    });
+    if (error) throw error;
   },
 
-  updatePassword: (userId: string, newPassword: string): void => {
-      const users = authService.getUsers();
-      const userIndex = users.findIndex(u => u.id === userId);
-      
-      if (userIndex === -1) throw new Error("Usuário não encontrado");
-
-      users[userIndex].passwordHash = btoa(newPassword);
-      localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  logout: async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
   },
 
-  resetPassword: (email: string, document: string, newPassword: string): void => {
-    const users = authService.getUsers();
-    const cleanDoc = document.replace(/[^\d]+/g, '');
+  // Added updatePassword method to fix the error in CompanySettingsModal
+  updatePassword: async (password: string) => {
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) throw error;
+  },
 
-    // Verifica se email e documento batem para segurança
-    const userIndex = users.findIndex(u => 
-        u.email.toLowerCase() === email.toLowerCase().trim() &&
-        u.document.replace(/[^\d]+/g, '') === cleanDoc 
-    );
+  // Mantido para compatibilidade com login manual via email se necessário no futuro
+  login: async (email: string, password: string): Promise<User> => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    if (error) throw error;
+    return authService.mapSupabaseUser(data.user);
+  },
 
-    if (userIndex === -1) {
-        throw new Error('Dados não conferem com nenhum registro.');
-    }
-
-    users[userIndex].passwordHash = btoa(newPassword);
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  register: async (userData: any): Promise<User> => {
+    const { data, error } = await supabase.auth.signUp({
+      email: userData.email,
+      password: userData.password,
+      options: {
+        data: {
+          name: userData.name,
+          document: userData.document,
+          phone: userData.whatsapp,
+          website: userData.website
+        }
+      }
+    });
+    if (error) throw error;
+    return authService.mapSupabaseUser(data.user);
   }
 };

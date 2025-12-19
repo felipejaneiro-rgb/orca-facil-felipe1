@@ -7,6 +7,7 @@ import { storageService } from './services/storageService';
 import { authService } from './services/authService';
 import { clientService } from './services/clientService';
 import { useDebounce } from './hooks/useDebounce';
+import { supabase } from './lib/supabase';
 import { 
   ArrowRight, 
   ArrowLeft, 
@@ -16,7 +17,7 @@ import {
   Menu
 } from 'lucide-react';
 
-// Lazy Load components to isolate errors and improve performance
+// Lazy Load components
 const AuthView = lazy(() => import('./components/AuthView'));
 const DashboardView = lazy(() => import('./components/DashboardView'));
 const HistoryModal = lazy(() => import('./components/HistoryModal'));
@@ -24,14 +25,12 @@ const ReportsView = lazy(() => import('./components/ReportsView'));
 const CatalogView = lazy(() => import('./components/CatalogView'));
 const ClientsView = lazy(() => import('./components/ClientsView'));
 
-// Form components lazy loaded
 const CompanyForm = lazy(() => import('./components/CompanyForm'));
 const ClientForm = lazy(() => import('./components/ClientForm'));
 const ItemsForm = lazy(() => import('./components/ItemsForm'));
 const QuotePreview = lazy(() => import('./components/QuotePreview'));
 const PublicQuoteView = lazy(() => import('./components/PublicQuoteView'));
 
-// Modals lazy loaded
 const CompanySettingsModal = lazy(() => import('./components/CompanySettingsModal'));
 const ServiceManagerModal = lazy(() => import('./components/ServiceManagerModal'));
 
@@ -41,12 +40,11 @@ const STORAGE_KEY_THEME = 'orcaFacil_theme';
 
 type AppView = 'dashboard' | 'editor' | 'history' | 'reports' | 'catalog' | 'clients' | 'public-view';
 
-// Helper functions for safe history manipulation
 const safePushState = (state: any, url: string) => {
   try {
     window.history.pushState(state, '', url);
   } catch (e) {
-    console.warn('History pushState blocked by environment', e);
+    console.warn('History pushState blocked', e);
   }
 };
 
@@ -54,7 +52,7 @@ const safeReplaceState = (state: any, url: string) => {
   try {
     window.history.replaceState(state, '', url);
   } catch (e) {
-    console.warn('History replaceState blocked by environment', e);
+    console.warn('History replaceState blocked', e);
   }
 };
 
@@ -78,29 +76,36 @@ const App: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedId, setLastSavedId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-
   const [isDarkMode, setIsDarkMode] = useState(false);
 
+  // SUPABASE AUTH LISTENER
   useEffect(() => {
-    try {
-        const user = authService.getCurrentUser();
-        setCurrentUser(user);
-    } catch (e) {
-        console.error("Auth check failed", e);
-    } finally {
-        setIsAuthChecking(false);
-    }
+    // Check initial session
+    authService.getCurrentUser().then(user => {
+      setCurrentUser(user);
+      setIsAuthChecking(false);
+    });
+
+    // Listen for changes (login, logout, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user) {
+        setCurrentUser(authService.mapSupabaseUser(session.user));
+      } else {
+        setCurrentUser(null);
+      }
+      setIsAuthChecking(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  // Browser History Management
   useEffect(() => {
-    // Initial push
     if (currentUser) {
        safeReplaceState({ view: 'dashboard' }, '');
     }
 
     const handlePopState = (event: PopStateEvent) => {
-        if (event.state && event.state.view) {
+        if (event.state?.view) {
             setCurrentView(event.state.view);
         } else {
             setCurrentView('dashboard');
@@ -116,11 +121,11 @@ const App: React.FC = () => {
         const savedProfile = localStorage.getItem(STORAGE_KEY_PROFILE);
         if (!savedProfile) {
             const newProfile: CompanyProfile = {
-                name: currentUser.name,
-                document: currentUser.document,
-                email: currentUser.email,
+                name: currentUser.name || '',
+                document: currentUser.document || '',
+                email: currentUser.email || '',
                 phone: currentUser.whatsapp || '',
-                website: currentUser.website,
+                website: currentUser.website || '',
                 address: ''
             };
             setDefaultCompany(newProfile);
@@ -153,9 +158,7 @@ const App: React.FC = () => {
                     const parsedProfile = JSON.parse(savedProfile);
                     setDefaultCompany(parsedProfile);
                     profileToUse = parsedProfile;
-                } catch (e) {
-                    console.error("Failed to parse profile", e);
-                }
+                } catch (e) { console.error(e); }
             }
 
             if (savedData) {
@@ -169,7 +172,6 @@ const App: React.FC = () => {
                         client: { ...INITIAL_QUOTE.client, ...(parsed.client || {}) }
                     });
                 } catch (e) {
-                    console.error("Failed to parse saved data", e);
                     const nextNum = await storageService.getNextQuoteNumber();
                     setQuoteData({ ...INITIAL_QUOTE, number: nextNum, company: profileToUse });
                 }
@@ -177,13 +179,10 @@ const App: React.FC = () => {
                 const nextNum = await storageService.getNextQuoteNumber();
                 setQuoteData({ ...INITIAL_QUOTE, number: nextNum, company: profileToUse });
             }
-            
             setIsLoaded(true);
         }
     };
-    
     initData();
-
   }, [currentUser]);
 
   useEffect(() => {
@@ -196,127 +195,38 @@ const App: React.FC = () => {
       const newMode = !isDarkMode;
       setIsDarkMode(newMode);
       localStorage.setItem(STORAGE_KEY_THEME, newMode ? 'dark' : 'light');
-      if (newMode) {
-          document.documentElement.classList.add('dark');
-      } else {
-          document.documentElement.classList.remove('dark');
-      }
+      if (newMode) document.documentElement.classList.add('dark');
+      else document.documentElement.classList.remove('dark');
   }, [isDarkMode]);
 
-  const handleSaveSettings = (profile: CompanyProfile) => {
-    setDefaultCompany(profile);
-    localStorage.setItem(STORAGE_KEY_PROFILE, JSON.stringify(profile));
-    
-    if (!quoteData.company.name) {
-      setQuoteData(prev => ({ ...prev, company: profile }));
-    }
-  };
+  const handleLogout = useCallback(async () => {
+      if (confirm('Deseja sair da sua conta?')) {
+          await authService.logout();
+          // State is handled by onAuthStateChange
+          setCurrentView('dashboard');
+          safePushState({ view: 'dashboard' }, '/');
+      }
+  }, []);
 
-  const handleSaveToHistory = async () => {
-    if (!quoteData.client.name) {
-      alert("Por favor, preencha pelo menos o nome do cliente antes de salvar.");
-      if (currentStep !== 1) setCurrentStep(1);
-      return;
-    }
-
-    setIsSaving(true);
-    const savedQuote = await storageService.save(quoteData);
-    setQuoteData(savedQuote); 
-    setIsSaving(false);
-    
-    setLastSavedId(savedQuote.id);
-    setTimeout(() => setLastSavedId(null), 3000);
-  };
-  
-  const handleApproveQuote = async () => {
-      setIsSaving(true);
-      const approvedQuote = { ...quoteData, status: 'approved' as const };
-      const saved = await storageService.save(approvedQuote);
-      setQuoteData(saved);
-      setIsSaving(false);
-      setLastSavedId(saved.id);
-      showToast("Orçamento APROVADO com sucesso!");
-      setTimeout(() => setLastSavedId(null), 3000);
-  };
-
-  const handleResendQuote = async () => {
-      setIsSaving(true);
-      const updatedQuote: QuoteData = { 
-          ...quoteData, 
-          status: 'pending', // Back to pending
-          clientFeedback: undefined, // Clear old feedback
-          signature: undefined // Clear old signature if any
-      };
-      const saved = await storageService.save(updatedQuote);
-      setQuoteData(saved);
-      setIsSaving(false);
-      setLastSavedId(saved.id);
-      showToast("Orçamento reenviado (status pendente)!");
-      setTimeout(() => setLastSavedId(null), 3000);
-  };
-
-  const handlePublicStatusChange = async (status: QuoteStatus, feedback?: string) => {
-      setIsSaving(true);
-      const updatedQuote = { ...quoteData, status, clientFeedback: feedback };
-      const saved = await storageService.save(updatedQuote);
-      setQuoteData(saved);
-      setIsSaving(false);
-      
-      if(status === 'approved') showToast("Cliente APROVOU o orçamento!");
-      if(status === 'rejected') showToast("Cliente REJEITOU o orçamento.");
-      if(status === 'negotiating') showToast("Cliente solicitou AJUSTES.");
-  };
+  const handleNavigate = useCallback((view: any) => {
+      if (view === 'settings') setShowSettings(true);
+      else {
+          setCurrentView(view);
+          safePushState({ view }, `#${view}`);
+      }
+      setIsSidebarOpen(false);
+  }, []);
 
   const handleLoadQuote = useCallback((quote: QuoteData) => {
-    if (currentView === 'editor' && !confirm('Carregar este orçamento substituirá o rascunho atual. Deseja continuar?')) {
-        return;
-    }
     setQuoteData(quote);
     setCurrentStep(3);
-    
     setCurrentView('editor');
     safePushState({ view: 'editor' }, '#editor');
-    
     setIsSidebarOpen(false);
-  }, [currentView]);
-
-  const updateData = useCallback((newData: Partial<QuoteData>) => {
-    setQuoteData(prev => ({ ...prev, ...newData }));
-    if (lastSavedId) setLastSavedId(null);
-  }, [lastSavedId]);
-
-  const showToast = (msg: string) => {
-      setToastMessage(msg);
-      setTimeout(() => setToastMessage(null), 3000);
-  };
-
-  const nextStep = () => {
-      if (currentStep === 1) {
-          if (!quoteData.client.name) {
-              alert("Por favor, preencha o nome do cliente.");
-              return;
-          }
-          const savedNewClient = clientService.autoSaveClient(quoteData.client);
-          if (savedNewClient) {
-              showToast("Cliente salvo automaticamente na sua carteira!");
-          }
-      }
-      setCurrentStep(prev => Math.min(prev + 1, 3));
-  };
-
-  const prevStep = () => setCurrentStep(prev => Math.max(prev - 1, 0));
+  }, []);
 
   const handleNewQuote = useCallback(async () => {
-    const isUnsavedDraft = !quoteData.id && (quoteData.client.name || quoteData.items.length > 0);
-
-    if (isUnsavedDraft) {
-        if(!window.confirm('Você tem um rascunho não salvo. Deseja descartá-lo e iniciar um novo?')) {
-            return; 
-        }
-    }
-
     const nextNumber = await storageService.getNextQuoteNumber();
-
     setQuoteData({
         ...INITIAL_QUOTE,
         id: '', 
@@ -325,37 +235,11 @@ const App: React.FC = () => {
     });
     setLastSavedId(null);
     setCurrentStep(0);
-    
     setCurrentView('editor');
     safePushState({ view: 'editor' }, '#new');
-    
     setIsSidebarOpen(false);
+  }, [defaultCompany]);
 
-  }, [quoteData, defaultCompany]);
-
-  const handleLogout = useCallback(() => {
-      if (confirm('Tem certeza que deseja sair?')) {
-          authService.logout();
-          setCurrentUser(null);
-          setQuoteData(INITIAL_QUOTE);
-          setCurrentStep(0);
-          setCurrentView('dashboard');
-          safePushState({ view: 'dashboard' }, '/');
-      }
-  }, []);
-
-  const handleNavigate = useCallback((view: any) => {
-      if (view === 'settings') { 
-          setShowSettings(true); 
-      } else {
-          setCurrentView(view);
-          safePushState({ view }, `#${view}`);
-      }
-      setIsSidebarOpen(false);
-  }, []);
-
-  // --- RENDER HELPERS ---
-  
   if (isAuthChecking) {
       return <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900"><Loader2 className="animate-spin text-brand-600" /></div>;
   }
@@ -363,99 +247,33 @@ const App: React.FC = () => {
   if (!currentUser) {
       return (
         <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900"><Loader2 className="animate-spin text-brand-600" /></div>}>
-            <AuthView onLoginSuccess={() => {
-                const user = authService.getCurrentUser();
-                setCurrentUser(user);
-                setCurrentView('dashboard'); 
-                safePushState({ view: 'dashboard' }, '/');
-            }} />
+            <AuthView onLoginSuccess={() => {}} />
         </Suspense>
       );
   }
 
-  // --- MAIN APP RENDER ---
   const renderContent = () => {
-      if (currentView === 'public-view') {
-          return (
-              <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader2 className="animate-spin text-brand-600"/></div>}>
-                  <PublicQuoteView 
-                    data={quoteData} 
-                    onStatusChange={handlePublicStatusChange}
-                    onBack={() => {
-                        setCurrentView('editor');
-                        safePushState({ view: 'editor' }, '#editor');
-                    }}
-                  />
-              </Suspense>
-          );
-      }
-
-      if (currentView === 'dashboard') {
-          return (
-             <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader2 className="animate-spin text-brand-600"/></div>}>
-                <DashboardView 
-                    user={currentUser} 
-                    onNavigate={handleNavigate} 
-                    onLoadQuote={handleLoadQuote} 
-                    onNewQuote={handleNewQuote}
-                />
-             </Suspense>
-          );
-      }
-      if (currentView === 'history') {
-          return (
-            <div className="max-w-6xl mx-auto h-auto md:h-full flex flex-col">
-                <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader2 className="animate-spin text-brand-600"/></div>}>
-                    <HistoryModal 
-                        isOpen={true} 
-                        onClose={() => {}} 
-                        onLoadQuote={handleLoadQuote} 
-                    />
-                </Suspense>
-            </div>
-          );
-      }
-      if (currentView === 'reports') {
-          return (
-            <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader2 className="animate-spin text-brand-600"/></div>}>
-                <ReportsView />
-            </Suspense>
-          );
-      }
-      if (currentView === 'catalog') {
-          return (
-            <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader2 className="animate-spin text-brand-600"/></div>}>
-                <CatalogView />
-            </Suspense>
-          );
-      }
-      if (currentView === 'clients') {
-          return (
-            <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader2 className="animate-spin text-brand-600"/></div>}>
-                <ClientsView />
-            </Suspense>
-          );
-      }
+      if (currentView === 'public-view') return <Suspense fallback={<Loader2 className="animate-spin"/>}><PublicQuoteView data={quoteData} onStatusChange={() => {}} onBack={() => handleNavigate('editor')}/></Suspense>;
+      if (currentView === 'dashboard') return <Suspense fallback={<Loader2 className="animate-spin"/>}><DashboardView user={currentUser} onNavigate={handleNavigate} onLoadQuote={handleLoadQuote} onNewQuote={handleNewQuote}/></Suspense>;
+      if (currentView === 'history') return <Suspense fallback={<Loader2 className="animate-spin"/>}><HistoryModal isOpen={true} onClose={() => {}} onLoadQuote={handleLoadQuote} /></Suspense>;
+      if (currentView === 'reports') return <Suspense fallback={<Loader2 className="animate-spin"/>}><ReportsView /></Suspense>;
+      if (currentView === 'catalog') return <Suspense fallback={<Loader2 className="animate-spin"/>}><CatalogView /></Suspense>;
+      if (currentView === 'clients') return <Suspense fallback={<Loader2 className="animate-spin"/>}><ClientsView /></Suspense>;
       
-      // Default: Editor
       return (
         <div className="max-w-4xl mx-auto pb-10">
             <StepIndicator currentStep={currentStep} onStepClick={setCurrentStep} />
             <div className="mt-6">
                 <Suspense fallback={<div className="flex h-64 items-center justify-center"><Loader2 className="animate-spin text-brand-600"/></div>}>
-                    {currentStep === 0 && <CompanyForm data={quoteData} updateData={updateData} defaultCompany={defaultCompany} />}
-                    {currentStep === 1 && <ClientForm data={quoteData} updateData={updateData} />}
-                    {currentStep === 2 && <ItemsForm data={quoteData} updateData={updateData} />}
+                    {currentStep === 0 && <CompanyForm data={quoteData} updateData={(d) => setQuoteData(p => ({...p, ...d}))} defaultCompany={defaultCompany} />}
+                    {currentStep === 1 && <ClientForm data={quoteData} updateData={(d) => setQuoteData(p => ({...p, ...d}))} />}
+                    {currentStep === 2 && <ItemsForm data={quoteData} updateData={(d) => setQuoteData(p => ({...p, ...d}))} />}
                     {currentStep === 3 && (
                         <QuotePreview 
                             data={quoteData} 
                             onEdit={() => setCurrentStep(2)} 
-                            onApprove={handleApproveQuote} 
-                            onSimulateClientView={() => {
-                                setCurrentView('public-view');
-                                safePushState({ view: 'public-view' }, '#preview');
-                            }}
-                            onResend={handleResendQuote}
+                            onApprove={() => {}} 
+                            onSimulateClientView={() => handleNavigate('public-view')}
                             isSaving={isSaving} 
                         />
                     )}
@@ -463,24 +281,11 @@ const App: React.FC = () => {
             </div>
             {currentStep < 3 && (
                 <div className="mt-8 flex justify-between pt-6 border-t border-gray-200 dark:border-gray-700">
-                <button
-                    onClick={prevStep}
-                    disabled={currentStep === 0}
-                    className={`flex items-center px-6 py-3 rounded-lg font-medium transition-all ${
-                    currentStep === 0 
-                        ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' 
-                        : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white'
-                    }`}
-                >
-                    <ArrowLeft size={20} className="mr-2" />
-                    Voltar
+                <button onClick={() => setCurrentStep(p => Math.max(0, p-1))} disabled={currentStep === 0} className="flex items-center px-6 py-3 rounded-lg font-medium text-gray-600 dark:text-gray-300 disabled:opacity-30">
+                    <ArrowLeft size={20} className="mr-2" /> Voltar
                 </button>
-                <button
-                    onClick={nextStep}
-                    className="flex items-center px-8 py-3 rounded-lg bg-brand-600 hover:bg-brand-700 dark:bg-brand-600 dark:hover:bg-brand-500 text-white font-semibold shadow-lg shadow-brand-500/30 transition-all transform hover:-translate-y-0.5"
-                >
-                    {currentStep === 2 ? 'Ver Resumo' : 'Próximo'}
-                    <ArrowRight size={20} className="ml-2" />
+                <button onClick={() => setCurrentStep(p => Math.min(3, p+1))} className="flex items-center px-8 py-3 rounded-lg bg-brand-600 hover:bg-brand-700 text-white font-semibold shadow-lg transition-all">
+                    {currentStep === 2 ? 'Ver Resumo' : 'Próximo'} <ArrowRight size={20} className="ml-2" />
                 </button>
                 </div>
             )}
@@ -488,119 +293,39 @@ const App: React.FC = () => {
       );
   };
 
-  const getHeaderTitle = () => {
-    switch (currentView) {
-        case 'dashboard': return 'Visão Geral';
-        case 'history': return 'Meus Orçamentos';
-        case 'reports': return 'Relatórios e KPIs';
-        case 'catalog': return 'Catálogo de Serviços';
-        case 'clients': return 'Meus Clientes';
-        case 'editor': return quoteData.client.name ? `Orçamento - ${quoteData.client.name}` : 'Criando Novo Orçamento';
-        default: return 'OrçaFácil';
-    }
-  };
-
-  if (!isLoaded && currentUser) return <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900"><Loader2 className="animate-spin text-brand-600" /></div>;
-
-  const hasActiveDraft = Boolean(quoteData.client.name || quoteData.items.length > 0);
-
   return (
-    <div className="flex h-screen bg-gray-50 dark:bg-gray-900 font-sans overflow-hidden transition-colors duration-200">
-      
-      {toastMessage && (
-          <div className="fixed top-5 left-1/2 transform -translate-x-1/2 z-[100] bg-gray-900 dark:bg-white text-white dark:text-gray-900 px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 animate-fadeIn">
-              <Check size={18} className="text-green-400 dark:text-green-600" />
-              <span className="font-medium text-sm">{toastMessage}</span>
-          </div>
-      )}
-      
+    <div className="flex h-screen bg-gray-50 dark:bg-gray-900 font-sans overflow-hidden transition-colors">
       <Suspense fallback={null}>
-          <CompanySettingsModal 
-            isOpen={showSettings} 
-            onClose={() => setShowSettings(false)}
-            onSave={handleSaveSettings}
-            initialData={defaultCompany}
-            isDarkMode={isDarkMode}
-            onToggleTheme={toggleTheme}
-          />
-          
-          <ServiceManagerModal 
-            isOpen={showServiceManager} 
-            onClose={() => setShowServiceManager(false)} 
-            onUpdate={() => {}} 
-          />
+          <CompanySettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} onSave={(p) => setDefaultCompany(p)} initialData={defaultCompany} isDarkMode={isDarkMode} onToggleTheme={toggleTheme}/>
+          <ServiceManagerModal isOpen={showServiceManager} onClose={() => setShowServiceManager(false)} onUpdate={() => {}} />
       </Suspense>
 
-      {isSidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-40 md:hidden transition-opacity"
-          onClick={() => setIsSidebarOpen(false)}
-        />
-      )}
-
-      <Sidebar 
-         isOpen={isSidebarOpen}
-         onClose={() => setIsSidebarOpen(false)}
-         currentView={currentView}
-         onNavigate={handleNavigate}
-         onNewQuote={handleNewQuote}
-         onToggleTheme={toggleTheme}
-         isDarkMode={isDarkMode}
-         onLogout={handleLogout}
-         currentUser={currentUser}
-         hasActiveDraft={hasActiveDraft}
-         setShowSettings={setShowSettings}
-      />
+      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} currentView={currentView} onNavigate={handleNavigate} onNewQuote={handleNewQuote} onToggleTheme={toggleTheme} isDarkMode={isDarkMode} onLogout={handleLogout} currentUser={currentUser} hasActiveDraft={true} setShowSettings={setShowSettings}/>
 
       <div className="flex-1 flex flex-col h-full w-full relative">
-        <header className="h-16 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 z-30 shrink-0 shadow-sm transition-colors">
+        <header className="h-16 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 z-30 shrink-0 shadow-sm">
            <div className="flex items-center">
-              <button 
-                onClick={() => setIsSidebarOpen(true)}
-                className="md:hidden mr-4 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 p-2 rounded-lg"
-              >
+              <button onClick={() => setIsSidebarOpen(true)} className="md:hidden mr-4 text-gray-500 dark:text-gray-400 p-2 rounded-lg">
                 <Menu size={24} />
               </button>
-              
-              <div className="hidden sm:block">
-                 <h1 className="text-lg font-semibold text-gray-800 dark:text-white">
-                    {getHeaderTitle()}
-                 </h1>
-                 {currentView === 'editor' && (
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                        {quoteData.number ? `#${quoteData.number}` : 'Sem número'}
-                    </p>
-                 )}
-              </div>
+              <h1 className="text-lg font-semibold text-gray-800 dark:text-white hidden sm:block">OrçaFácil</h1>
            </div>
-
            <div className="flex items-center gap-2">
               {currentView === 'editor' && (
-                  <button 
-                    onClick={handleSaveToHistory}
-                    disabled={isSaving}
-                    className={`flex items-center px-4 py-2 text-sm font-medium rounded-lg transition-all border shadow-sm ${
-                        lastSavedId 
-                        ? 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' 
-                        : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
-                    }`}
-                  >
-                    {isSaving ? (
-                        <Loader2 size={18} className="animate-spin sm:mr-2" />
-                    ) : lastSavedId ? (
-                        <Check size={18} className="sm:mr-2" />
-                    ) : (
-                        <Save size={18} className="sm:mr-2 text-brand-600 dark:text-brand-400" />
-                    )}
-                    <span className="hidden sm:inline">
-                        {lastSavedId ? 'Salvo!' : 'Salvar'}
-                    </span>
+                  <button onClick={async () => {
+                      setIsSaving(true);
+                      await storageService.save(quoteData);
+                      setIsSaving(false);
+                      setToastMessage("Salvo com sucesso!");
+                      setTimeout(() => setToastMessage(null), 3000);
+                  }} className="flex items-center px-4 py-2 text-sm font-medium rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 border border-gray-200">
+                    <Save size={18} className="mr-2 text-brand-600" /> {isSaving ? 'Salvando...' : 'Salvar'}
                   </button>
               )}
            </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 relative bg-gray-50/50 dark:bg-gray-900 transition-colors">
+        <main className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 relative">
            {renderContent()}
         </main>
       </div>
