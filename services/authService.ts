@@ -8,12 +8,12 @@ export const authService = {
   mapSupabaseUser: (sbUser: any): User => {
     return {
       id: sbUser.id,
-      name: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || 'Usuário',
+      name: sbUser.user_metadata?.full_name || sbUser.user_metadata?.name || 'Usuário Google',
       email: sbUser.email || '',
-      document: sbUser.user_metadata?.document || '',
+      document: sbUser.user_metadata?.document || '', // Campos adicionais podem ser vindo do profile/metadata
       whatsapp: sbUser.user_metadata?.phone || '',
       website: sbUser.user_metadata?.website || '',
-      passwordHash: '',
+      passwordHash: '', // Não usado com OAuth
       createdAt: sbUser.created_at
     };
   },
@@ -25,7 +25,10 @@ export const authService = {
   },
 
   loginWithGoogle: async () => {
+    // Definimos a URL de redirecionamento explicitamente. 
+    // Em alguns sandboxes, window.location.origin pode não ser suficiente.
     const redirectTo = window.location.origin + window.location.pathname;
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
@@ -44,11 +47,13 @@ export const authService = {
     if (error) throw error;
   },
 
+  // Added updatePassword method to fix the error in CompanySettingsModal
   updatePassword: async (password: string) => {
     const { error } = await supabase.auth.updateUser({ password });
     if (error) throw error;
   },
 
+  // Mantido para compatibilidade com login manual via email se necessário no futuro
   login: async (email: string, password: string): Promise<User> => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -58,21 +63,24 @@ export const authService = {
     return authService.mapSupabaseUser(data.user);
   },
 
-  /**
-   * Registro aprimorado que retorna sessão se disponível
-   */
-  register: async (userData: any) => {
+  // Fix: Corrected return type to include session for email verification handling in components/AuthView.tsx
+  register: async (userData: any): Promise<{ user: User | null; session: any }> => {
     const { data, error } = await supabase.auth.signUp({
       email: userData.email,
       password: userData.password,
       options: {
         data: {
           name: userData.name,
-          full_name: userData.name
+          document: userData.document,
+          phone: userData.whatsapp,
+          website: userData.website
         }
       }
     });
     if (error) throw error;
-    return data; // Retorna { user, session }
+    return {
+      user: data.user ? authService.mapSupabaseUser(data.user) : null,
+      session: data.session
+    };
   }
 };

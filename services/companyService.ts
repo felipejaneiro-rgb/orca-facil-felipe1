@@ -22,7 +22,8 @@ export const companyService = {
   },
 
   /**
-   * Cria o perfil inicial da empresa com as colunas reais do banco
+   * Insere o perfil da empresa no Supabase.
+   * O RLS do banco deve permitir INSERT se auth.uid() == owner_id.
    */
   createCompany: async (userId: string, profile: CompanyProfile): Promise<CompanyProfile> => {
     const { data, error } = await supabase
@@ -44,8 +45,9 @@ export const companyService = {
       .single();
 
     if (error) {
-      console.error("Erro ao criar empresa:", error);
-      throw error;
+      // Tratamento de erro específico para duplicidade ou violação de RLS
+      console.error("Erro Supabase (createCompany):", error);
+      throw new Error(error.message || "Erro ao salvar dados da empresa.");
     }
 
     return data;

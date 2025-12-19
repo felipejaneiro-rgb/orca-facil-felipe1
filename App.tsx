@@ -76,25 +76,29 @@ const App: React.FC = () => {
   const [defaultCompany, setDefaultCompany] = useState<CompanyProfile>(INITIAL_QUOTE.company);
   
   const [isSaving, setIsSaving] = useState(false);
-  const [lastSavedId, setLastSavedId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
-  // LÓGICA DE CHECAGEM DE EMPRESA
+  // LÓGICA DE CHECAGEM DE EMPRESA (O Passo a Passo)
   const checkCompanyRegistration = useCallback(async (userId: string) => {
     setIsCheckingCompany(true);
     try {
+      // 1. Consulta o banco de dados companies
       const company = await companyService.getCompany(userId);
+      
+      // 2. Decide o destino baseado na existência do registro
       if (company) {
         setDefaultCompany(company);
         localStorage.setItem(STORAGE_KEY_PROFILE, JSON.stringify(company));
         setCurrentView('dashboard');
       } else {
+        // Se não houver empresa, força o Onboarding
         setCurrentView('onboarding');
       }
     } catch (err) {
       console.error("Erro ao verificar empresa:", err);
-      setCurrentView('dashboard');
+      // Em caso de erro técnico, enviamos para onboarding para garantir integridade
+      setCurrentView('onboarding');
     } finally {
       setIsCheckingCompany(false);
     }
@@ -115,6 +119,7 @@ const App: React.FC = () => {
         checkCompanyRegistration(user.id);
       } else {
         setCurrentUser(null);
+        setCurrentView('dashboard'); // Volta para o login
       }
       setIsAuthChecking(false);
     });
@@ -123,11 +128,18 @@ const App: React.FC = () => {
   }, [checkCompanyRegistration]);
 
   useEffect(() => {
-    if (currentUser && currentView !== 'onboarding') {
-       safeReplaceState({ view: 'dashboard' }, '');
+    // Bloqueia manipulação manual de URL para sair do onboarding
+    if (currentUser && currentView === 'onboarding') {
+       safeReplaceState({ view: 'onboarding' }, '');
     }
 
     const handlePopState = (event: PopStateEvent) => {
+        // Bloqueio de navegação 'back' se estiver no onboarding
+        if (currentView === 'onboarding') {
+            safeReplaceState({ view: 'onboarding' }, '');
+            return;
+        }
+
         if (event.state?.view) {
             setCurrentView(event.state.view);
         } else {
@@ -137,7 +149,7 @@ const App: React.FC = () => {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [currentUser]);
+  }, [currentUser, currentView]);
 
   useEffect(() => {
     const savedTheme = localStorage.getItem(STORAGE_KEY_THEME);
@@ -153,36 +165,12 @@ const App: React.FC = () => {
 
     const initData = async () => {
         if (currentUser) {
-            const savedData = localStorage.getItem(STORAGE_KEY);
             const savedProfile = localStorage.getItem(STORAGE_KEY_PROFILE);
-            
-            let profileToUse = INITIAL_QUOTE.company;
-
             if (savedProfile) {
                 try {
                     const parsedProfile = JSON.parse(savedProfile);
                     setDefaultCompany(parsedProfile);
-                    profileToUse = parsedProfile;
                 } catch (e) { console.error(e); }
-            }
-
-            if (savedData) {
-                try {
-                    const parsed = JSON.parse(savedData);
-                    setQuoteData({
-                        ...INITIAL_QUOTE,
-                        ...parsed,
-                        items: Array.isArray(parsed.items) ? parsed.items : [],
-                        company: { ...INITIAL_QUOTE.company, ...(parsed.company || {}) },
-                        client: { ...INITIAL_QUOTE.client, ...(parsed.client || {}) }
-                    });
-                } catch (e) {
-                    const nextNum = await storageService.getNextQuoteNumber();
-                    setQuoteData({ ...INITIAL_QUOTE, number: nextNum, company: profileToUse });
-                }
-            } else {
-                const nextNum = await storageService.getNextQuoteNumber();
-                setQuoteData({ ...INITIAL_QUOTE, number: nextNum, company: profileToUse });
             }
             setIsLoaded(true);
         }
@@ -207,12 +195,14 @@ const App: React.FC = () => {
   const handleLogout = useCallback(async () => {
       if (confirm('Deseja sair da sua conta?')) {
           await authService.logout();
+          setCurrentUser(null);
           setCurrentView('dashboard');
           safePushState({ view: 'dashboard' }, '/');
       }
   }, []);
 
   const handleNavigate = useCallback((view: any) => {
+      // TRAVA DE SEGURANÇA: Se estiver em onboarding, não navega.
       if (currentView === 'onboarding') return; 
 
       if (view === 'settings') setShowSettings(true);
@@ -239,7 +229,6 @@ const App: React.FC = () => {
         number: nextNumber, 
         company: defaultCompany.razao_social ? defaultCompany : INITIAL_QUOTE.company
     });
-    setLastSavedId(null);
     setCurrentStep(0);
     setCurrentView('editor');
     safePushState({ view: 'editor' }, '#new');
@@ -252,17 +241,22 @@ const App: React.FC = () => {
       setCurrentView('dashboard');
   };
 
+  // FULL SCREEN LOADING STATE (Evita flash de UI)
   if (isAuthChecking || isCheckingCompany) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-950">
-            <Loader2 className="animate-spin text-brand-600 mb-4" size={40} />
-            <p className="text-gray-500 font-medium animate-pulse">
-                {isCheckingCompany ? 'Verificando perfil da empresa...' : 'Carregando...'}
-            </p>
+            <div className="bg-white dark:bg-gray-900 p-8 rounded-[3rem] shadow-2xl flex flex-col items-center border border-gray-100 dark:border-gray-800">
+                <Loader2 className="animate-spin text-brand-600 mb-6" size={48} />
+                <h2 className="text-xl font-black text-gray-900 dark:text-white tracking-tight">OrçaFácil</h2>
+                <p className="text-gray-500 dark:text-gray-400 font-medium text-sm mt-2">
+                    {isCheckingCompany ? 'Verificando perfil da empresa...' : 'Carregando sessão...'}
+                </p>
+            </div>
         </div>
       );
   }
 
+  // LOGIN VIEW
   if (!currentUser) {
       return (
         <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950"><Loader2 className="animate-spin text-brand-600" /></div>}>
@@ -271,8 +265,7 @@ const App: React.FC = () => {
       );
   }
 
-  // DEBUG: Para ver a tela de onboarding sem deletar dados, descomente a linha abaixo e comente o if normal
-  // if (true) {
+  // ONBOARDING VIEW (Bloqueia todo o resto do App)
   if (currentView === 'onboarding') {
       return (
         <Suspense fallback={<Loader2 className="animate-spin"/>}>
@@ -307,7 +300,6 @@ const App: React.FC = () => {
                             onEdit={() => setCurrentStep(2)} 
                             onApprove={() => {}} 
                             onSimulateClientView={() => handleNavigate('public-view')}
-                            isSaving={isSaving} 
                         />
                     )}
                 </Suspense>
@@ -330,7 +322,6 @@ const App: React.FC = () => {
     <div className="flex h-screen bg-gray-50 dark:bg-gray-950 font-sans overflow-hidden transition-colors">
       <Suspense fallback={null}>
           <CompanySettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} onSave={(p) => setDefaultCompany(p)} initialData={defaultCompany} isDarkMode={isDarkMode} onToggleTheme={toggleTheme}/>
-          <ServiceManagerModal isOpen={showServiceManager} onClose={() => setShowServiceManager(false)} onUpdate={() => {}} />
       </Suspense>
 
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} currentView={currentView} onNavigate={handleNavigate} onNewQuote={handleNewQuote} onToggleTheme={toggleTheme} isDarkMode={isDarkMode} onLogout={handleLogout} currentUser={currentUser} hasActiveDraft={true} setShowSettings={setShowSettings}/>
@@ -341,7 +332,7 @@ const App: React.FC = () => {
               <button onClick={() => setIsSidebarOpen(true)} className="md:hidden mr-4 text-gray-500 dark:text-gray-400 p-2 rounded-lg">
                 <Menu size={24} />
               </button>
-              <h1 className="text-lg font-semibold text-gray-800 dark:text-white hidden sm:block">OrçaFácil</h1>
+              <h1 className="text-lg font-bold text-gray-800 dark:text-white hidden sm:block">OrçaFácil</h1>
            </div>
            <div className="flex items-center gap-2">
               {currentView === 'editor' && (
@@ -349,9 +340,9 @@ const App: React.FC = () => {
                       setIsSaving(true);
                       await storageService.save(quoteData);
                       setIsSaving(false);
-                      setToastMessage("Salvo com sucesso!");
-                      setTimeout(() => setToastMessage(null), 3000);
-                  }} className="flex items-center px-4 py-2 text-sm font-medium rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-700">
+                      setToastMessage("Salvo!");
+                      setTimeout(() => setToastMessage(null), 2000);
+                  }} className="flex items-center px-4 py-2 text-sm font-bold rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-700 shadow-sm hover:bg-gray-50 transition-colors">
                     <Save size={18} className="mr-2 text-brand-600" /> {isSaving ? 'Salvando...' : 'Salvar'}
                   </button>
               )}
