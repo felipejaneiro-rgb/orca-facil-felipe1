@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { LayoutDashboard, Mail, Hash, Phone, MapPin, Briefcase, User, CheckCircle, ArrowRight, ChevronLeft, AlertCircle } from 'lucide-react';
+import { LayoutDashboard, Mail, Hash, Phone, MapPin, Briefcase, User, CheckCircle, ArrowRight, ChevronLeft, AlertCircle, Loader2 } from 'lucide-react';
 import Input from './ui/Input';
 import Button from './ui/Button';
 import { authService } from '../services/authService';
@@ -56,7 +56,6 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Validação básica de campos obrigatórios
     if (!formData.razao_social || !formData.nome_fantasia || !formData.cnpj || !formData.email || !formData.telefone) {
       setError("Preencha todos os campos obrigatórios (*)");
       return;
@@ -77,17 +76,18 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
         tipo_empresa: personType
       };
 
-      // CADASTRO REAL NO SUPABASE
-      // A função createCompany já lida com o owner_id = userId
+      // Tenta o cadastro real
       const savedCompany = await companyService.createCompany(userId, companyData);
-      
-      // Notifica o App.tsx para atualizar o estado global e redirecionar
       onComplete(savedCompany);
       
     } catch (err: any) {
-      console.error("Onboarding Submit Error:", err);
-      // Exibe mensagem de erro do Supabase ou genérica
-      setError(err.message || "Erro ao salvar sua empresa. Tente novamente.");
+      console.error("Onboarding Error:", err);
+      // Se for erro de RLS, damos uma dica técnica mas amigável
+      if (err.message.includes('RLS') || err.message.includes('security policy')) {
+        setError("Erro de permissão no banco de dados. Verifique se as políticas de RLS estão configuradas para permitir inserção.");
+      } else {
+        setError(err.message || "Erro ao salvar sua empresa. Tente novamente.");
+      }
     } finally {
       setLoading(false);
     }
@@ -96,7 +96,7 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col md:flex-row transition-colors duration-300 relative">
       
-      {/* Painel Esquerdo - Branding */}
+      {/* Lado Esquerdo */}
       <div className="hidden md:flex md:w-5/12 lg:w-4/12 bg-brand-600 dark:bg-gray-900 flex-col justify-center items-center text-white p-10 relative overflow-hidden shrink-0">
         <div className="absolute inset-0 bg-gradient-to-br from-brand-600 to-brand-800 dark:from-black dark:to-gray-900 opacity-90 z-0"></div>
         <div className="relative z-10 text-center animate-fadeIn">
@@ -105,65 +105,52 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
             </div>
             <h1 className="text-4xl lg:text-5xl font-black mb-4 tracking-tighter">OrçaFácil</h1>
             <p className="text-lg text-brand-100 dark:text-gray-400 max-w-xs mx-auto font-medium">
-                Quase lá! Vamos configurar o perfil da sua empresa.
+                Vamos configurar o perfil profissional da sua empresa.
             </p>
-            
-            <div className="mt-12 flex flex-col gap-4 text-left max-w-xs mx-auto">
-                <div className="flex items-start gap-3">
-                    <div className="mt-1 bg-white/20 p-1 rounded-full"><CheckCircle size={14}/></div>
-                    <p className="text-sm font-medium">Dados usados no cabeçalho dos PDFs</p>
-                </div>
-                <div className="flex items-start gap-3">
-                    <div className="mt-1 bg-white/20 p-1 rounded-full"><CheckCircle size={14}/></div>
-                    <p className="text-sm font-medium">Configuração única e rápida</p>
-                </div>
-            </div>
         </div>
       </div>
 
-      {/* Painel Direito - Formulário */}
-      <div className="flex-1 flex items-center justify-center p-4 md:p-12 bg-white dark:bg-gray-950 overflow-y-auto">
+      {/* Lado Direito */}
+      <div className="flex-1 flex items-center justify-center p-4 md:p-12 bg-white dark:bg-gray-950 overflow-y-auto min-h-screen">
         <div className="w-full max-w-xl space-y-8 py-8 animate-slideUp relative">
             
-            {/* Mobile Logo Header */}
-            <div className="flex md:hidden flex-col items-center mb-8 animate-fadeIn">
-                <div className="bg-brand-600 p-3.5 rounded-[1.25rem] shadow-lg shadow-brand-500/20 mb-3">
+            <div className="flex md:hidden flex-col items-center mb-8">
+                <div className="bg-brand-600 p-3.5 rounded-[1.25rem] shadow-lg mb-3">
                     <LayoutDashboard size={32} className="text-white" />
                 </div>
                 <h1 className="text-2xl font-black text-gray-900 dark:text-white tracking-tighter">OrçaFácil</h1>
             </div>
 
-            {/* Botão Sair */}
             <button 
                 onClick={handleLogout}
-                className="absolute -top-4 left-0 flex items-center gap-2 text-gray-400 hover:text-red-500 font-bold transition-colors group"
                 disabled={loading}
+                className="absolute -top-4 left-0 flex items-center gap-2 text-gray-400 hover:text-red-500 font-bold transition-colors group"
             >
                 <div className="p-2 rounded-full bg-gray-50 dark:bg-gray-900 group-hover:bg-red-50 transition-colors">
                     <ChevronLeft size={20} />
                 </div>
-                <span className="text-sm font-bold">Sair da conta</span>
+                <span className="text-sm">Sair da conta</span>
             </button>
 
             <div className="text-center md:text-left pt-2 md:pt-6">
                 <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">
-                    Configure sua Empresa
+                    Configuração Inicial
                 </h2>
                 <p className="mt-2 text-sm text-gray-500 dark:text-gray-400 font-medium">
-                    Preencha os dados abaixo para começar a emitir orçamentos profissionais.
+                    Esses dados serão exibidos no topo dos seus orçamentos em PDF.
                 </p>
             </div>
 
             {error && (
-                <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-4 rounded-2xl text-sm font-bold border border-red-100 dark:border-red-800 flex items-center gap-3 animate-bounce">
-                    <AlertCircle size={18} />
-                    {error}
+                <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-4 rounded-2xl text-sm font-bold border border-red-100 dark:border-red-800 flex items-start gap-3 animate-bounce">
+                    <AlertCircle size={20} className="shrink-0 mt-0.5" />
+                    <span>{error}</span>
                 </div>
             )}
 
             <form onSubmit={handleSubmit} className="space-y-8">
                 <div className="space-y-3">
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest">Tipo de Negócio *</label>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest">Tipo de Cadastro *</label>
                     <div className="grid grid-cols-2 gap-4">
                         <button 
                             type="button" 
@@ -253,7 +240,7 @@ const OnboardingView: React.FC<Props> = ({ userId, userEmail, onComplete }) => {
                         className="w-full h-16 rounded-[1.5rem] text-lg font-black shadow-xl shadow-brand-500/20" 
                         isLoading={loading}
                     >
-                        Concluir e Ir para o Painel <ArrowRight size={20} className="ml-2" />
+                        Concluir e Acessar Painel <ArrowRight size={20} className="ml-2" />
                     </Button>
                 </div>
             </form>

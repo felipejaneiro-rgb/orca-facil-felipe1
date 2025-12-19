@@ -11,9 +11,9 @@ export const companyService = {
       .from('companies')
       .select('*')
       .eq('owner_id', userId)
-      .single();
+      .maybeSingle(); // maybeSingle não gera erro se não encontrar nada
 
-    if (error && error.code !== 'PGRST116') {
+    if (error) {
       console.error("Erro ao buscar empresa:", error);
       throw error;
     }
@@ -23,14 +23,21 @@ export const companyService = {
 
   /**
    * Insere o perfil da empresa no Supabase.
-   * O RLS do banco deve permitir INSERT se auth.uid() == owner_id.
+   * Forçamos o uso do ID da sessão atual para garantir compatibilidade com RLS.
    */
   createCompany: async (userId: string, profile: CompanyProfile): Promise<CompanyProfile> => {
+    // Verificação extra: garantir que o usuário está realmente autenticado no cliente
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      throw new Error("Sessão expirada ou usuário não autenticado.");
+    }
+
     const { data, error } = await supabase
       .from('companies')
       .insert([
         { 
-          owner_id: userId,
+          owner_id: user.id, // Usamos o ID vindo direto da sessão validada
           razao_social: profile.razao_social,
           nome_fantasia: profile.nome_fantasia,
           cnpj: profile.cnpj,
@@ -45,8 +52,10 @@ export const companyService = {
       .single();
 
     if (error) {
-      // Tratamento de erro específico para duplicidade ou violação de RLS
-      console.error("Erro Supabase (createCompany):", error);
+      console.error("Erro RLS/Database (createCompany):", error);
+      if (error.code === '42501') {
+        throw new Error("Erro de permissão (RLS). Verifique as políticas no Supabase.");
+      }
       throw new Error(error.message || "Erro ao salvar dados da empresa.");
     }
 
